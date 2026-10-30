@@ -1,0 +1,2169 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Twitch Easy Media Alerts</title>
+<style>
+  :root {
+    --bg: #0e0e10;
+    --surface: #18181b;
+    --surface-2: #1f1f23;
+    --surface-3: #2a2a30;
+    --border: #2f2f35;
+    --border-strong: #3d3d44;
+    --text: #efeff1;
+    --muted: #adadb8;
+    --faint: #75757f;
+    --accent: #9147ff;
+    --accent-hover: #a970ff;
+    --accent-press: #772ce8;
+    --accent-soft: rgba(145, 71, 255, .16);
+    --ok: #2fd27a;
+    --warn: #f5a524;
+    --danger: #f2545b;
+    --danger-soft: rgba(242, 84, 91, .14);
+    --chroma: #00ff00;
+    --radius: 10px;
+    --radius-sm: 6px;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { margin: 0; height: 100%; }
+  /* Hidden until the page is in the chosen language (init sets lang). */
+  html:not([lang]) body { visibility: hidden; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    user-select: none;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  input, select, button { font: inherit; color: inherit; }
+
+  input[type=text], input[type=number], select {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 7px 10px;
+    outline: none;
+    min-width: 0;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  input[type=text]:hover, input[type=number]:hover, select:hover { border-color: #55555e; }
+  input[type=text]:focus, input[type=number]:focus, select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  input::placeholder { color: var(--faint); }
+  input[type=text], input[type=number] { user-select: text; }
+  select { cursor: pointer; padding-right: 6px; }
+  option { background: var(--surface-2); }
+  input[type=number] { width: 76px; }
+  input[type=color] {
+    width: 42px; height: 34px; padding: 3px; flex: none; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  }
+  input[type=color]::-webkit-color-swatch-wrapper { padding: 0; }
+  input[type=color]::-webkit-color-swatch { border: 0; border-radius: 3px; }
+
+  button {
+    border: 1px solid var(--border-strong);
+    background: var(--surface-3);
+    border-radius: var(--radius-sm);
+    padding: 7px 14px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background .15s, border-color .15s, transform .05s;
+  }
+  button:hover { background: #34343b; }
+  button:active { transform: translateY(1px); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.primary:active { background: var(--accent-press); }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover { background: var(--surface-3); color: var(--text); }
+  button:disabled { opacity: .45; cursor: default; }
+  button:disabled:active { transform: none; }
+  button.icon { width: 34px; height: 34px; padding: 0; display: inline-grid; place-items: center; }
+  button.icon svg { width: 16px; height: 16px; }
+  button.danger-armed { background: var(--danger); border-color: var(--danger); color: #fff; width: auto; padding: 0 10px; }
+
+  /* layout */
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 24px;
+    background: rgba(14, 14, 16, .92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  header .logo { width: 34px; height: 34px; flex: none; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .1px; }
+  header .sub { color: var(--faint); font-size: 12px; }
+  header .spacer { flex: 1; }
+  header .lang { padding: 4px 6px; font-size: 13px; color: var(--muted); flex: none; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 10px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    font-size: 13px; color: var(--muted);
+    max-width: 45vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .pill[data-state=connected] { color: var(--text); }
+  .pill[data-state=connected] .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 210, 122, .18); }
+  .pill[data-state=connecting] .dot, .pill[data-state=reconnecting] .dot { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 24px 28px; display: grid; gap: 16px; }
+  .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  .grid-log { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .grid-2, .grid-log { grid-template-columns: minmax(0, 1fr); } }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px 18px; min-width: 0; }
+  .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .card-head h2 { margin: 0; font-size: 14px; font-weight: 650; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .card-head .spacer { flex: 1; }
+  .count { color: var(--faint); font-size: 12px; font-weight: 500; }
+
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > input[type=text] { flex: 1; }
+  .field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-top: 14px; align-content: start; }
+  .field:first-child, .grid-2 > .field { margin-top: 0; }
+  .field > .label { font-size: 12px; color: var(--muted); }
+  .hint { color: var(--faint); font-size: 12px; margin-top: 8px; }
+  .error-text { color: var(--danger); font-size: 12px; margin-top: 8px; }
+  .error-text:empty, .hint:empty { display: none; }
+  .warn-text { color: var(--warn); font-size: 12px; margin-top: 8px; }
+  .warn-text:empty { display: none; }
+
+  /* tabs */
+  .tabs { display: flex; gap: 4px; padding: 4px; width: fit-content; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
+  .tabs button { display: inline-flex; align-items: center; gap: 8px; border: 0; background: transparent; color: var(--muted); padding: 8px 16px; border-radius: 8px; font-weight: 600; }
+  .tabs button:hover { background: var(--surface-3); color: var(--text); }
+  .tabs button[aria-selected=true] { background: var(--accent); color: #fff; }
+  .tabs svg { width: 16px; height: 16px; flex: none; }
+  .tab-count { font-size: 12px; font-weight: 600; padding: 0 7px; border-radius: 999px; background: rgba(255,255,255,.12); }
+  .tab-count:empty { display: none; }
+  .tab-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+  .tab-dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 210, 122, .18); }
+  .obs-line { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--muted); font-size: 13px; }
+  .obs-line .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; }
+  .obs-line.ok .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 210, 122, .18); }
+  .obs-line.ok { color: var(--text); }
+  .obs-line .obs-line-text { flex: 1; }
+  .tab-panel, .sub-panel { display: grid; gap: 16px; }
+  .tab-panel[hidden], .sub-panel[hidden] { display: none; }
+  /* tabs inside a tab: underlined instead of filled */
+  .tabs.subtabs { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 0; width: auto; gap: 2px; }
+  .tabs.subtabs button { border-radius: 6px 6px 0 0; padding: 8px 14px 9px; }
+  .tabs.subtabs button[aria-selected=true] { background: transparent; color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tabs.subtabs .tab-count { background: var(--surface-3); }
+
+  /* checkbox */
+  .check { display: flex; align-items: flex-start; gap: 10px; margin-top: 12px; cursor: pointer; color: var(--text); }
+  .check input { appearance: none; width: 18px; height: 18px; margin: 1px 0 0; flex: none; border: 1.5px solid #5c5c66; border-radius: 4px; background: var(--surface-2); cursor: pointer; display: grid; place-items: center; transition: background .15s, border-color .15s; }
+  .check input:checked { background: var(--accent); border-color: var(--accent); }
+  .check input:checked::after { content: ""; width: 9px; height: 5px; border: 2px solid #fff; border-top: 0; border-right: 0; transform: translateY(-1px) rotate(-45deg); }
+  .check input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .check small { display: block; color: var(--faint); font-size: 12px; }
+
+  /* switch */
+  .switch { position: relative; width: 38px; height: 22px; flex: none; cursor: pointer; display: inline-block; }
+  .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .switch span { position: absolute; inset: 0; background: #3a3a42; border-radius: 999px; transition: background .15s; pointer-events: none; }
+  .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #d6d6dc; transition: transform .15s, background .15s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::after { transform: translateX(16px); background: #fff; }
+  .switch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* range */
+  input[type=range] { appearance: none; background: transparent; height: 22px; cursor: pointer; flex: 1; min-width: 80px; margin: 0; --p: 50%; }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(to right, var(--accent) var(--p), #3a3a42 var(--p)); }
+  input[type=range]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #fff; margin-top: -5px; box-shadow: 0 1px 3px rgba(0,0,0,.5); }
+  input[type=range]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .vol { display: flex; align-items: center; gap: 10px; }
+  .vol output { width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+
+  /* commands */
+  .list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .cmd {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 12px 12px 14px;
+    display: grid;
+    grid-template-columns: auto minmax(110px, 170px) minmax(0, 1fr) auto;
+    grid-template-areas: "sw trig file act" ". opts opts opts";
+    gap: 10px 12px;
+    align-items: center;
+    transition: border-color .3s, box-shadow .3s, opacity .15s;
+  }
+  .cmd .sw { grid-area: sw; }
+  .cmd .f-trigger { grid-area: trig; font-weight: 600; }
+  .cmd .file { grid-area: file; display: flex; gap: 8px; min-width: 0; }
+  .cmd .file input { flex: 1; }
+  .cmd .actions { grid-area: act; display: flex; gap: 6px; }
+  .cmd .opts { grid-area: opts; display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: center; color: var(--muted); font-size: 13px; }
+  .cmd .opts label { display: flex; align-items: center; gap: 8px; }
+  .cmd .opts .vol { min-width: 220px; flex: 1 1 220px; max-width: 320px; }
+  .cmd .opts select { max-width: 280px; }
+  .cmd.off > :not(.sw) { opacity: .45; }
+  .cmd.playing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), 0 0 24px rgba(145, 71, 255, .25); }
+  button.icon.stop { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.icon.stop:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .cmd .f-trigger.dup, .cmd .f-file.missing { border-color: var(--warn); }
+  .cmd .note { grid-column: 2 / -1; color: var(--warn); font-size: 12px; margin-top: -4px; }
+  .cmd .note:empty { display: none; }
+
+  /* video commands: placement editor */
+  .vcmd { grid-template-areas: "sw trig file act" ". opts opts opts" ". place place place" ". key key key"; }
+  .gcmd { grid-template-areas: "sw trig file act" ". snd snd snd" ". opts opts opts" ". place place place" ". key key key"; }
+  .gcmd .sound-file { grid-area: snd; }
+  .vrect img.thumb { width: 100%; height: 100%; object-fit: fill; display: block; pointer-events: none; }
+  .vcmd .keying { grid-area: key; display: grid; gap: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .vcmd .keying .check { margin-top: 0; }
+  .key-opts { display: grid; gap: 10px; padding-left: 28px; }
+  .keying:not(.on) .key-opts { display: none; }
+  .key-opts .f-key-hex { flex: 0 0 96px; font-family: "Cascadia Mono", Consolas, monospace; }
+  .f-pick.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .key-sliders { display: flex; flex-wrap: wrap; gap: 10px 22px; color: var(--muted); font-size: 13px; }
+  .key-sliders .vol { min-width: 220px; flex: 1 1 220px; max-width: 320px; }
+  .vrect .thumb-keyed { position: absolute; inset: 0; width: 100%; height: 100%; display: none; pointer-events: none; }
+  .vrect.keyed { background: repeating-conic-gradient(#45454d 0% 25%, #2a2a30 0% 50%) 50% / 12px 12px; }
+  .vrect.keyed .thumb { opacity: 0; }
+  .vrect.keyed .thumb-keyed { display: block; }
+  .stage.picking .vrect { cursor: crosshair; }
+  .vcmd .place { grid-area: place; display: flex; flex-wrap: wrap; gap: 14px 20px; align-items: flex-start; }
+  .stage {
+    position: relative; width: 320px; max-width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+    border: 1px solid var(--border-strong); border-radius: 6px;
+    background:
+      linear-gradient(to right, transparent calc(50% - .5px), rgba(255,255,255,.07) calc(50% - .5px), rgba(255,255,255,.07) calc(50% + .5px), transparent calc(50% + .5px)),
+      linear-gradient(to bottom, transparent calc(50% - .5px), rgba(255,255,255,.07) calc(50% - .5px), rgba(255,255,255,.07) calc(50% + .5px), transparent calc(50% + .5px)),
+      color-mix(in srgb, var(--chroma) 14%, #121214);
+  }
+  .vrect {
+    position: absolute; border: 2px solid var(--accent); border-radius: 3px; overflow: hidden;
+    background: rgba(145, 71, 255, .3); cursor: grab; touch-action: none;
+    box-shadow: 0 2px 10px rgba(0,0,0,.4);
+  }
+  .vrect.dragging { cursor: grabbing; }
+  .vrect video { width: 100%; height: 100%; object-fit: fill; display: block; pointer-events: none; }
+  .vrect-label { position: absolute; inset: 0; display: none; place-items: center; font-size: 22px; font-weight: 700; color: #fff; text-shadow: 0 1px 4px #000; pointer-events: none; }
+  .stage.random .vrect { border-style: dashed; cursor: default; }
+  .stage.random .vrect video { opacity: .5; }
+  .stage.random .vrect-label { display: grid; }
+  .place-side { display: grid; gap: 8px; min-width: 200px; flex: 1; align-content: start; }
+  .place-title { font-size: 12px; color: var(--muted); }
+  .anchors { display: grid; grid-template-columns: repeat(3, 28px); gap: 4px; }
+  .anchors button { width: 28px; height: 28px; padding: 0; display: grid; place-items: center; }
+  .anchors button::after { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--muted); }
+  .anchors button.on { background: var(--accent); border-color: var(--accent); }
+  .anchors button.on::after { background: #fff; }
+  .anchors button:disabled { opacity: .35; cursor: default; }
+  .place-side .check { margin-top: 2px; }
+  .vinfo { font-size: 12px; color: var(--faint); }
+  .vinfo.bad { color: var(--warn); }
+
+  @media (max-width: 760px) {
+    .cmd { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "sw trig act" ". file file" ". opts opts"; }
+    .vcmd { grid-template-areas: "sw trig act" ". file file" ". opts opts" ". place place" ". key key"; }
+    .gcmd { grid-template-areas: "sw trig act" ". file file" ". snd snd" ". opts opts" ". place place" ". key key"; }
+  }
+
+  .cmd-master {
+    display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+    margin-bottom: 12px; padding: 7px 16px 7px 10px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+    transition: border-color .15s, background .15s;
+  }
+  .cmd-master .master-text { font-weight: 600; }
+  .cmd-master.off { border-color: rgba(245, 165, 36, .55); background: rgba(245, 165, 36, .08); }
+  .cmd-master.off .master-text { color: var(--warn); }
+  .list.paused .cmd { opacity: .55; }
+
+  .empty { text-align: center; color: var(--faint); padding: 26px 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
+
+  /* OBS window card */
+  .vw-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .vw-status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .vw-status.open { color: var(--text); }
+  .vw-status.open .dot { background: var(--ok); box-shadow: 0 0 0 3px rgba(47, 210, 122, .18); }
+  .res-custom { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+  .res-custom[hidden] { display: none; }
+  .res-custom input { width: 92px; }
+  .row > #bgHex { flex: 0 0 96px; font-family: "Cascadia Mono", Consolas, monospace; text-transform: lowercase; }
+  .points { display: grid; gap: 10px; }
+  .points-head h2 { margin: 0; font-size: 14px; font-weight: 650; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .reward-table { display: grid; gap: 6px; }
+  .reward-item { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 8px 10px 8px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
+  .reward-item.linked { border-color: rgba(47, 210, 122, .35); }
+  .reward-item .r-title { font-weight: 600; }
+  .reward-item .r-cost { color: var(--muted); font-size: 12px; }
+  .reward-item .r-badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
+  .reward-item .r-link { color: var(--ok); font-size: 13px; overflow-wrap: anywhere; }
+  .reward-item .spacer { flex: 1; }
+  .reward-item button { padding: 5px 10px; }
+  .cmd .opts label[hidden] { display: none; }
+  .points-head { display: flex; align-items: center; gap: 8px; }
+  .points-head h3 { margin: 0; font-size: 14px; font-weight: 650; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); }
+  .points-head .spacer { flex: 1; }
+  .points .vw-status { margin: 0; }
+  .points .hint { margin-top: 0; }
+  .points details.obs-help { margin-top: 0; }
+  .points-code { display: grid; gap: 10px; padding: 10px 12px; border: 1px solid rgba(145, 71, 255, .55); border-radius: 8px; background: var(--accent-soft); }
+  .points-code[hidden] { display: none; }
+  #pointsCodeText { font: 700 18px "Cascadia Mono", Consolas, monospace; letter-spacing: 2px; color: #fff; user-select: text; }
+  .vw-status.bad { color: var(--warn); }
+  .vw-status.bad .dot { background: var(--warn); }
+  .obs-help a { color: var(--accent-hover); }
+  .obs-help code { font: 12px "Cascadia Mono", Consolas, monospace; background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+  .res-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .res-row select { width: 300px; max-width: 100%; }
+  .methods { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 16px; }
+  @media (max-width: 900px) { .methods { grid-template-columns: minmax(0, 1fr); } }
+  .method { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+  .method.recommended { border-color: rgba(145, 71, 255, .55); }
+  .method-head { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+  .method-head h3 { margin: 0; font-size: 15px; font-weight: 650; }
+  .method-head .spacer { flex: 1; }
+  .badge { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-hover); }
+  .method-sub { margin: 0; color: var(--muted); font-size: 13px; }
+  .method .vw-status { margin: 0; }
+  .method .field { margin-top: 0; }
+  .method details.obs-help { margin-top: 0; }
+  #obsUrl { font: 12px "Cascadia Mono", Consolas, monospace; color: var(--muted); }
+  details.obs-help { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+  details.obs-help summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+  details.obs-help summary:hover { color: var(--text); }
+  details.obs-help ol { margin: 10px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; display: grid; gap: 6px; }
+  details.obs-help b { color: var(--text); font-weight: 600; }
+
+  /* log */
+  #log { height: 260px; overflow-y: auto; font-size: 13px; user-select: text; margin: 0 -6px; padding: 0 6px; }
+  #log::-webkit-scrollbar, body::-webkit-scrollbar { width: 10px; }
+  #log::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb { background: #3a3a42; border-radius: 5px; border: 2px solid var(--surface); }
+  .entry { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid #222227; }
+  .entry time { color: var(--faint); font: 12px/1.6 "Cascadia Mono", Consolas, monospace; }
+  .entry span { overflow-wrap: anywhere; }
+  .entry[data-kind=play] span, .entry[data-kind=video] span, .entry[data-kind=gif] span { color: var(--text); }
+  .entry[data-kind=gif] span::before { content: "▶ "; color: var(--accent-hover); }
+  .entry[data-kind=play] span::before { content: "♪ "; color: var(--accent-hover); }
+  .entry[data-kind=video] span::before { content: "▶ "; color: var(--accent-hover); }
+  .entry[data-kind=skip] span { color: var(--faint); }
+  .entry[data-kind=info] span { color: var(--muted); }
+  .entry[data-kind=warn] span { color: var(--warn); }
+  .entry[data-kind=error] span { color: var(--danger); }
+  .log-empty { color: var(--faint); padding: 18px 0; text-align: center; }
+
+  .settings-dir { display: grid; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .settings-dir .label { font-size: 12px; color: var(--muted); }
+  .path { font: 12px "Cascadia Mono", Consolas, monospace; color: var(--faint); overflow-wrap: anywhere; user-select: text; }
+
+  .ctx {
+    position: fixed; z-index: 20; min-width: 170px; padding: 4px;
+    background: #232328; border: 1px solid var(--border-strong); border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.55);
+  }
+  .ctx[hidden] { display: none; }
+  .ctx button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 6px 12px; border-radius: 5px; }
+  .ctx button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+  .ctx button:disabled { color: var(--faint); cursor: default; opacity: 1; }
+  .pick { max-height: 50vh; overflow-y: auto; min-width: 260px; max-width: 420px; }
+  .pick button { display: flex; justify-content: space-between; gap: 18px; }
+  .pick .pick-cost { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .pick button:hover:not(:disabled) .pick-cost { color: inherit; }
+  .pick .pick-title { padding: 6px 12px 4px; color: var(--muted); font-size: 12px; }
+  .pick .pick-other { border-top: 1px solid var(--border); border-radius: 0 0 5px 5px; margin-top: 4px; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 20px);
+    background: #2b1a1d; border: 1px solid var(--danger); color: #ffd9db;
+    padding: 10px 16px; border-radius: 8px; max-width: min(560px, 90vw);
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 10;
+    box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
+</style>
+</head>
+<body>
+<header>
+  <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+    <rect width="64" height="64" rx="15" fill="#9147ff"/>
+    <path d="M14 26h8l11-9v30l-11-9h-8z" fill="#fff"/>
+    <path d="M39 24a11 11 0 0 1 0 16M44 18a19 19 0 0 1 0 28" stroke="#fff" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  </svg>
+  <div>
+    <h1>Twitch Easy Media Alerts</h1>
+    <div class="sub" data-en="Sounds, videos and GIFs for chat commands and channel points">Звуки, видео и GIF по командам из чата и за баллы канала</div>
+  </div>
+  <div class="spacer"></div>
+  <select id="language" class="lang" aria-label="Language">
+    <option value="en">English</option>
+    <option value="ru">Русский</option>
+  </select>
+  <div class="pill" id="statusPill" data-state="disconnected"><span class="dot"></span><span id="statusText" data-en="Not connected">Не подключено</span></div>
+</header>
+
+<main>
+  <div class="grid-2">
+    <section class="card">
+      <div class="card-head"><h2 data-en="Channel">Канал</h2></div>
+      <div class="row">
+        <input type="text" id="channel" placeholder="https://www.twitch.tv/имя_канала" data-en-placeholder="https://www.twitch.tv/channel_name" spellcheck="false" autocomplete="off">
+        <button id="connectBtn" class="primary" data-en="Connect">Подключиться</button>
+      </div>
+      <div class="error-text" id="channelError"></div>
+      <div class="warn-text" id="statusMessage"></div>
+      <div class="hint" data-en="The chat is read anonymously — no need to log in to Twitch.">Чат читается анонимно — входить в аккаунт Twitch не нужно.</div>
+      <label class="check"><input type="checkbox" id="autoConnect"><span data-en="Connect automatically on startup">Подключаться автоматически при запуске</span></label>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2 data-en="Playback">Воспроизведение</h2></div>
+      <div class="field">
+        <span class="label" data-en="Output device for sounds">Устройство вывода звуков</span>
+        <div class="row">
+          <select id="device" style="flex:1"></select>
+          <button class="icon" id="refreshDevices" title="Обновить список устройств" aria-label="Обновить список устройств" data-en-title="Refresh the device list" data-en-aria-label="Refresh the device list">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M12.5 1.8v2.6H9.9"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="label" data-en="Master volume (sounds and videos)">Общая громкость (звуки и видео)</span>
+        <div class="vol"><input type="range" id="masterVolume" min="0" max="100" step="1"><output id="masterVolumeVal">100%</output></div>
+      </div>
+      <div class="field">
+        <span class="label" data-en="Global cooldown between any commands">Общий кулдаун между любыми командами</span>
+        <div class="row"><input type="number" id="globalCooldown" min="0" max="3600" step="1"><span class="count" data-en="s · 0 — no limit">сек. · 0 — без ограничения</span></div>
+      </div>
+      <div class="error-text" id="deviceError"></div>
+      <div class="row" style="margin-top:14px"><button id="stopAll" data-en="■ Stop">■ Остановить</button></div>
+    </section>
+  </div>
+
+  <nav class="tabs" role="tablist" aria-label="Разделы" data-en-aria-label="Sections">
+    <button role="tab" data-tab="chat" aria-selected="true">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>
+      <span data-en="Chat">Чат</span> <span class="tab-count" id="tabChatCount"></span>
+    </button>
+    <button role="tab" data-tab="rewards" aria-selected="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><path d="M8 4.6l1 2.1 2.3.3-1.7 1.6.4 2.3L8 9.8l-2 1.1.4-2.3-1.7-1.6 2.3-.3z" fill="currentColor" stroke="none"/></svg>
+      <span data-en="Channel Points">Баллы канала</span> <span class="tab-count" id="tabRewardsCount"></span>
+    </button>
+    <button role="tab" data-tab="obs" aria-selected="false">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.2"/><circle cx="8" cy="8" r="2" fill="currentColor" stroke="none"/></svg>
+      OBS <span class="tab-dot" id="tabObsDot"></span>
+    </button>
+  </nav>
+
+  <div class="tab-panel" data-panel="chat" role="tabpanel">
+    <nav class="tabs subtabs" role="tablist" aria-label="Команды чата" data-en-aria-label="Chat commands" data-group="chat">
+      <button role="tab" data-subtab="sounds" aria-selected="true">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 6h2.5L8 3v10L4.5 10H2z"/><path d="M10.2 5.6a3.4 3.4 0 0 1 0 4.8M12 3.8a6 6 0 0 1 0 8.4" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>
+        <span data-en="Sounds">Звуки</span> <span class="tab-count" id="tabSoundsCount"></span>
+      </button>
+      <button role="tab" data-subtab="videos" aria-selected="false">
+        <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1.5" y="3.5" width="9" height="9" rx="1.5"/><path d="M11.5 7l3-2v6l-3-2z"/></svg>
+        <span data-en="Videos">Видео</span> <span class="tab-count" id="tabVideosCount"></span>
+      </button>
+      <button role="tab" data-subtab="gifs" aria-selected="false">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4 11l3-3.5 2 2 1.5-1.5L13 11" stroke-linejoin="round"/><circle cx="5.5" cy="5.8" r="1" fill="currentColor" stroke="none"/></svg>
+        <span data-en="GIF + Sound">GIF + звук</span> <span class="tab-count" id="tabGifsCount"></span>
+      </button>
+    </nav>
+
+    <div class="sub-panel" data-group="chat" data-subpanel="sounds">
+      <section class="card">
+        <div class="card-head">
+          <h2 data-en="Sound commands">Звуковые команды</h2><span class="count" id="cmdCount"></span>
+          <div class="spacer"></div>
+          <button class="primary" id="addCmd" data-en="+ Add command">+ Добавить команду</button>
+        </div>
+        <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
+        <div class="list" id="cmdList"></div>
+        <div class="hint" data-en="A command fires when it stands in a message as a separate word, case doesn't matter: “!sad” fires in “oh no !SAD” but not in “!sadness”. If a message has several commands, the one highest in the list fires (sounds first, then videos, then GIFs). Cooldown — how many seconds the command won't fire again. Only one thing plays at a time — a sound, a video or a GIF: until it ends, chat commands are skipped, and ▶ turns into ■ “Stop”.">Команда срабатывает, если стоит в сообщении отдельным словом, регистр не важен: «!sad» сработает в «ну всё !SAD», но не в «!sadness». Если в сообщении несколько команд — срабатывает верхняя по списку (сначала звуки, потом видео, потом GIF). Кулдаун — сколько секунд команда не будет срабатывать повторно. Одновременно играет что-то одно — звук, видео или GIF: пока оно не закончится, команды из чата пропускаются, а ▶ превращается в ■ «Стоп».</div>
+      </section>
+    </div>
+
+    <div class="sub-panel" data-group="chat" data-subpanel="videos" hidden>
+      <div class="obs-line"><span class="dot"></span><span class="obs-line-text"></span><button class="ghost go-obs" data-en="Set up showing in OBS →">Настроить показ в OBS →</button></div>
+      <section class="card">
+        <div class="card-head">
+          <h2 data-en="Video commands">Видео-команды</h2><span class="count" id="videoCount"></span>
+          <div class="spacer"></div>
+          <button class="primary" id="addVideo" data-en="+ Add video">+ Добавить видео</button>
+        </div>
+        <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
+        <div class="list" id="videoList"></div>
+        <div class="hint" data-en="Scale — the video's size relative to the frame (the resolution is on the “OBS” tab): at 100% the video fits the frame entirely (big ones shrink, small ones stretch). Drag the video on the frame preview or use the buttons to its right to place it; at 100% scale there's no room to move — lower the scale. “Random position” — the video appears in a new place each time.">Масштаб — размер видео относительно кадра (разрешение — на вкладке «OBS»): при 100% видео вписано в кадр целиком (большие уменьшаются, маленькие растягиваются). Место задаётся перетаскиванием видео на схеме кадра или кнопками справа от неё; при масштабе 100% двигать некуда — уменьшите масштаб. «Случайное место» — видео каждый раз появляется в новом месте.</div>
+      </section>
+    </div>
+
+    <div class="sub-panel" data-group="chat" data-subpanel="gifs" hidden>
+      <div class="obs-line"><span class="dot"></span><span class="obs-line-text"></span><button class="ghost go-obs" data-en="Set up showing in OBS →">Настроить показ в OBS →</button></div>
+      <section class="card">
+        <div class="card-head">
+          <h2 data-en="GIF + Sound">GIF + звук</h2><span class="count" id="gifCount"></span>
+          <div class="spacer"></div>
+          <button class="primary" id="addGif" data-en="+ Add GIF">+ Добавить GIF</button>
+        </div>
+        <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
+        <div class="list" id="gifList"></div>
+        <div class="hint" data-en="The picture (gif, webp, apng) is shown while the sound plays, or for the set number of seconds; with neither sound nor time — 5 seconds. Scale, position, “Random position” and the transparent color work as for videos, and it's shown in the same OBS source.">Картинка (gif, webp, apng) показывается, пока играет звук, или заданное число секунд; без звука и без времени — 5 секунд. Масштаб, место, «Случайное место» и прозрачный цвет работают как у видео, а показ идёт в том же источнике OBS.</div>
+      </section>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-panel="rewards" role="tabpanel" hidden>
+    <section class="card">
+      <div class="points">
+        <div class="points-head">
+          <h2 data-en="Twitch account">Аккаунт Twitch</h2>
+          <div class="spacer"></div>
+          <button class="ghost" id="twitchLogout" hidden data-en="Log out">Выйти</button>
+          <button class="primary" id="twitchLogin" data-en="Log in with Twitch">Войти через Twitch</button>
+        </div>
+        <div class="vw-status" id="pointsStatus"><span class="dot"></span><span></span></div>
+        <div class="points-code" id="pointsCode" hidden>
+          <div><span data-en="Confirm the login on the Twitch page — it opened in your browser. Code:">Подтвердите вход на странице Twitch — она открылась в браузере. Код:</span> <b id="pointsCodeText"></b></div>
+          <div class="row"><button id="pointsOpen" data-en="Open the page again">Открыть страницу ещё раз</button><button class="ghost" id="pointsCancel" data-en="Cancel">Отмена</button></div>
+        </div>
+        <div class="hint" data-en="Rewards for your channel's points play what is set up below for the reward with the same title (case doesn't matter). Chat messages don't trigger them. While another sound or video plays, rewards wait in a queue; cooldowns don't apply to them — Twitch has its own for rewards.">Награды за баллы вашего канала запускают то, что настроено ниже для награды с таким же названием (регистр не важен). Сообщения из чата их не запускают. Пока играет другой звук или видео, награды ждут в очереди; кулдауны на них не действуют — у Twitch для наград свои.</div>
+        <details class="obs-help" id="clientIdBox">
+          <summary data-en="Twitch app Client ID">Client ID приложения Twitch</summary>
+          <div class="row" style="margin-top:10px"><input type="text" id="clientId" placeholder="Вставьте Client ID" data-en-placeholder="Paste the Client ID" spellcheck="false" autocomplete="off" aria-label="Client ID"></div>
+          <ol>
+            <li data-en="Open &lt;a href=&quot;#&quot; data-url=&quot;https://dev.twitch.tv/console/apps/create&quot;&gt;dev.twitch.tv/console/apps&lt;/a&gt; and log in with your Twitch account (two-factor authentication is required).">Откройте <a href="#" data-url="https://dev.twitch.tv/console/apps/create">dev.twitch.tv/console/apps</a> — войдите своим аккаунтом Twitch (нужна двухфакторная защита).</li>
+            <li data-en="“Register Your Application”: any name, OAuth Redirect URLs — &lt;code&gt;http://localhost&lt;/code&gt;, Category — “Application Integration”, Client Type — &lt;b&gt;“Public”&lt;/b&gt;.">«Register Your Application»: любое имя, OAuth Redirect URLs — <code>http://localhost</code>, категория — «Application Integration», тип клиента — <b>«Public»</b>.</li>
+            <li data-en="Copy the &lt;b&gt;Client ID&lt;/b&gt; and paste it above. The Client Secret isn't needed. This is done once.">Скопируйте <b>Client ID</b> и вставьте выше. Client Secret не нужен. Это делается один раз.</li>
+          </ol>
+        </details>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2 data-en="Channel rewards">Награды канала</h2><span class="count" id="rewardsSummary"></span>
+        <div class="spacer"></div>
+        <button class="ghost" id="refreshRewards" data-en="Refresh">Обновить</button>
+      </div>
+      <div class="reward-table" id="rewardTable"></div>
+      <div class="hint" data-en="Choose what a reward plays: a sound, a video or a GIF with sound. An entry with its title appears below — then just pick the file.">Выберите для награды, что она запускает: звук, видео или GIF со звуком. Запись появится ниже с этим названием — останется выбрать файл.</div>
+    </section>
+    <datalist id="rewardTitles"></datalist>
+
+    <nav class="tabs subtabs" role="tablist" aria-label="Что запускают награды" data-en-aria-label="What rewards play" data-group="rewards">
+      <button role="tab" data-subtab="sounds" aria-selected="true">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M2 6h2.5L8 3v10L4.5 10H2z"/><path d="M10.2 5.6a3.4 3.4 0 0 1 0 4.8M12 3.8a6 6 0 0 1 0 8.4" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>
+        <span data-en="Sounds">Звуки</span> <span class="tab-count" id="tabRewardSoundsCount"></span>
+      </button>
+      <button role="tab" data-subtab="videos" aria-selected="false">
+        <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1.5" y="3.5" width="9" height="9" rx="1.5"/><path d="M11.5 7l3-2v6l-3-2z"/></svg>
+        <span data-en="Videos">Видео</span> <span class="tab-count" id="tabRewardVideosCount"></span>
+      </button>
+      <button role="tab" data-subtab="gifs" aria-selected="false">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4 11l3-3.5 2 2 1.5-1.5L13 11" stroke-linejoin="round"/><circle cx="5.5" cy="5.8" r="1" fill="currentColor" stroke="none"/></svg>
+        <span data-en="GIF + Sound">GIF + звук</span> <span class="tab-count" id="tabRewardGifsCount"></span>
+      </button>
+    </nav>
+
+    <div class="sub-panel" data-group="rewards" data-subpanel="sounds">
+      <section class="card">
+        <div class="card-head">
+          <h2 data-en="Sounds for points">Звуки за баллы</h2><span class="count" id="rewardSoundCount"></span>
+          <div class="spacer"></div>
+          <button class="primary" id="addRewardSound" data-en="+ Add sound">+ Добавить звук</button>
+        </div>
+        <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
+        <div class="list" id="rewardSoundList"></div>
+      </section>
+    </div>
+
+    <div class="sub-panel" data-group="rewards" data-subpanel="videos" hidden>
+      <div class="obs-line"><span class="dot"></span><span class="obs-line-text"></span><button class="ghost go-obs" data-en="Set up showing in OBS →">Настроить показ в OBS →</button></div>
+      <section class="card">
+        <div class="card-head">
+          <h2 data-en="Videos for points">Видео за баллы</h2><span class="count" id="rewardVideoCount"></span>
+          <div class="spacer"></div>
+          <button class="primary" id="addRewardVideo" data-en="+ Add video">+ Добавить видео</button>
+        </div>
+        <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
+        <div class="list" id="rewardVideoList"></div>
+      </section>
+    </div>
+
+    <div class="sub-panel" data-group="rewards" data-subpanel="gifs" hidden>
+      <div class="obs-line"><span class="dot"></span><span class="obs-line-text"></span><button class="ghost go-obs" data-en="Set up showing in OBS →">Настроить показ в OBS →</button></div>
+      <section class="card">
+        <div class="card-head">
+          <h2 data-en="GIF + Sound for points">GIF + звук за баллы</h2><span class="count" id="rewardGifCount"></span>
+          <div class="spacer"></div>
+          <button class="primary" id="addRewardGif" data-en="+ Add GIF">+ Добавить GIF</button>
+        </div>
+        <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
+        <div class="list" id="rewardGifList"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="tab-panel" data-panel="obs" role="tabpanel" hidden>
+    <section class="card">
+      <div class="card-head"><h2 data-en="Showing videos and GIFs in OBS">Показ видео и GIF в OBS</h2></div>
+      <div class="field">
+        <span class="label" data-en="Resolution — videos and GIFs are fitted into it. Set it to match the OBS canvas.">Разрешение — видео и GIF вписываются в него. Поставьте как у холста OBS.</span>
+        <div class="res-row">
+          <select id="resPreset"></select>
+          <div class="res-custom" id="resCustom" hidden>
+            <input type="number" id="resW" min="320" max="7680" step="1" aria-label="Ширина" data-en-aria-label="Width"> ×
+            <input type="number" id="resH" min="180" max="4320" step="1" aria-label="Высота" data-en-aria-label="Height"> <span data-en="px">пикс.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="methods">
+        <div class="method recommended">
+          <div class="method-head"><h3 data-en="Browser source">Источник «Браузер»</h3><span class="badge" data-en="recommended">рекомендуется</span></div>
+          <p class="method-sub" data-en="Transparent background without a chroma key, the video's sound goes straight into OBS, no extra window on screen.">Прозрачный фон без хромакея, звук видео идёт прямо в OBS, лишнее окно на экране не нужно.</p>
+          <div class="row">
+            <input type="text" id="obsUrl" readonly spellcheck="false" aria-label="Адрес для источника «Браузер»" data-en-aria-label="URL for the Browser source">
+            <button id="copyObsUrl" data-en="Copy">Копировать</button>
+          </div>
+          <div class="vw-status" id="obsStatus"><span class="dot"></span><span></span></div>
+          <details class="obs-help">
+            <summary data-en="How to add it to OBS">Как добавить в OBS</summary>
+            <ol>
+              <li data-en="In OBS: “Sources” → “+” → &lt;b&gt;“Browser”&lt;/b&gt;.">В OBS: «Источники» → «+» → <b>«Браузер»</b>.</li>
+              <li data-en="Untick “Local file” and paste the URL above into the &lt;b&gt;“URL”&lt;/b&gt; field. The URL is permanent — you only need to paste it once.">Снимите галку «Локальный файл» и вставьте адрес выше в поле <b>«URL-адрес»</b>. Адрес постоянный — вставить его нужно один раз.</li>
+              <li><b data-en="Width">Ширина</b> <span class="res-w">1920</span>, <b data-en="height">высота</b> <span class="res-h">1080</span> <span data-en="— the same as the resolution above.">— как разрешение выше.</span></li>
+              <li data-en="Turn on &lt;b&gt;“Control audio via OBS”&lt;/b&gt; — the video's sound shows up as its own line in the OBS mixer.">Включите <b>«Управлять звуком через OBS»</b> — звук видео появится в микшере OBS отдельной строкой.</li>
+              <li data-en="The background is transparent, no chroma key needed. The app must be running — the source connects to it by itself.">Фон прозрачный, хромакей не нужен. Программа должна быть запущена — источник подключится к ней сам.</li>
+            </ol>
+          </details>
+        </div>
+
+        <div class="method">
+          <div class="method-head"><h3 data-en="Window Capture">Захват окна</h3><div class="spacer"></div><button id="videoWindowBtn" data-en="Open window">Открыть окно</button></div>
+          <p class="method-sub" data-en="Fallback: a separate window with a solid background that the “Chroma Key” filter removes.">Запасной способ: отдельное окно с однотонным фоном, который убирает фильтр «Хромакей».</p>
+          <div class="vw-status" id="videoWindowStatus"><span class="dot"></span><span></span></div>
+          <div class="field">
+            <span class="label" data-en="Window background color">Цвет фона окна</span>
+            <div class="row">
+              <input type="color" id="bgColor" aria-label="Цвет фона" data-en-aria-label="Background color">
+              <input type="text" id="bgHex" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Цвет фона, hex" data-en-aria-label="Background color, hex">
+              <button class="ghost" id="bgGreen" data-en="Green">Зелёный</button>
+              <button class="ghost" id="bgBlue" data-en="Blue">Синий</button>
+            </div>
+          </div>
+          <details class="obs-help">
+            <summary data-en="How to add it to OBS">Как добавить в OBS</summary>
+            <ol>
+              <li data-en="Open the window with the button above. Don't minimize it — OBS can't see minimized windows — but it can be covered by other windows or moved to a second monitor.">Откройте окно кнопкой выше. Сворачивать его нельзя — OBS не видит свёрнутые окна, — но его можно закрыть другими окнами или унести на второй монитор.</li>
+              <li data-en="In OBS, add a &lt;b&gt;“Window Capture”&lt;/b&gt; source and choose the window &lt;b&gt;“Twitch Easy Media Alerts — video for OBS”&lt;/b&gt;. Capture method — &lt;b&gt;“Windows 10 (1903 and up)”&lt;/b&gt;.">В OBS добавьте источник <b>«Захват окна»</b> и выберите окно <b>«Twitch Easy Media Alerts — видео для OBS»</b>. Метод захвата — <b>«Windows 10 (1903 и новее)»</b>.</li>
+              <li data-en="Stretch the source to the whole screen: right-click → &lt;b&gt;“Transform” → “Stretch to screen”&lt;/b&gt;.">Растяните источник на весь экран: правый клик → <b>«Преобразовать» → «Растянуть на весь экран»</b>.</li>
+              <li data-en="Right-click the source → &lt;b&gt;“Filters”&lt;/b&gt; → add &lt;b&gt;“Chroma Key”&lt;/b&gt; and choose the window's background color.">Правый клик по источнику → <b>«Фильтры»</b> → добавьте <b>«Хромакей»</b> и выберите цвет фона окна.</li>
+              <li data-en="The video's sound goes to the system output device: add &lt;b&gt;“Application Audio Capture”&lt;/b&gt; → TwitchEasyMediaAlerts.exe, or leave it to “Desktop Audio”.">Звук видео идёт в системное устройство вывода: добавьте <b>«Захват звука приложения»</b> → TwitchEasyMediaAlerts.exe или оставьте «Звук рабочего стола».</li>
+            </ol>
+          </details>
+        </div>
+      </div>
+      <div class="hint" data-en="Videos and GIFs go to the same source — no need to add a second one. While OBS is connected through the Browser source, things are shown there and not in the window, so the sound isn't doubled.">Видео и GIF идут в один и тот же источник — второй добавлять не нужно. Пока OBS подключён через «Браузер», показ идёт туда, а не в окно, — чтобы звук не задваивался.</div>
+    </section>
+  </div>
+
+  <div class="grid-log">
+    <section class="card">
+      <div class="card-head"><h2 data-en="Log">Журнал</h2><div class="spacer"></div><button class="ghost" id="clearLog" data-en="Clear">Очистить</button></div>
+      <div id="log"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2 data-en="App Window">Окно программы</h2></div>
+      <label class="check"><input type="checkbox" id="minimizeToTray"><span data-en="Minimize to tray&lt;small&gt;The minimize button hides the window in the taskbar's hidden icons&lt;/small&gt;">Сворачивать в трей<small>Кнопка «свернуть» прячет окно в скрытые значки панели задач</small></span></label>
+      <label class="check"><input type="checkbox" id="closeToTray"><span data-en="Close to tray&lt;small&gt;The close button hides the window too; quit from the icon's menu&lt;/small&gt;">Закрывать в трей<small>Крестик тоже прячет окно; выход — через меню значка</small></span></label>
+      <label class="check"><input type="checkbox" id="startMinimized"><span data-en="Start minimized to tray">Запускать свёрнутым в трей</span></label>
+      <div class="hint" style="margin-top:14px" data-en="Tray icon: left-click opens the window, right-click shows the menu.">Значок в трее: левый клик — открыть окно, правый — меню.</div>
+      <div class="settings-dir">
+        <span class="label" data-en="Settings file">Файл настроек</span>
+        <span class="path" id="configPath"></span>
+        <div class="row">
+          <button id="pickSettingsDir" data-en="Change folder…">Изменить папку…</button>
+          <button class="ghost" id="openSettingsDir" data-en="Open folder">Открыть папку</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="toast" role="alert"></div>
+
+<div id="pickMenu" class="ctx pick" hidden role="menu"></div>
+
+<div id="ctx" class="ctx" hidden role="menu">
+  <button data-act="cut" role="menuitem" data-en="Cut">Вырезать</button>
+  <button data-act="copy" role="menuitem" data-en="Copy">Копировать</button>
+  <button data-act="paste" role="menuitem" data-en="Paste">Вставить</button>
+  <button data-act="selectAll" role="menuitem" data-en="Select all">Выделить всё</button>
+</div>
+
+<template id="cmdTpl">
+  <div class="cmd">
+    <label class="switch sw" title="Включить / выключить команду" data-en-title="Turn the command on / off"><input type="checkbox" class="f-enabled" aria-label="Команда включена" data-en-aria-label="Command on"><span></span></label>
+    <input type="text" class="f-trigger" placeholder="!команда" data-en-placeholder="!command" spellcheck="false" autocomplete="off" aria-label="Команда" data-en-aria-label="Command">
+    <div class="file">
+      <input type="text" class="f-file" placeholder="Путь к звуку: mp3, wav, ogg, flac" data-en-placeholder="Sound file path: mp3, wav, ogg, flac" spellcheck="false" autocomplete="off" aria-label="Звуковой файл" data-en-aria-label="Sound file">
+      <button class="f-browse" data-en="Browse…">Обзор…</button>
+    </div>
+    <div class="actions">
+      <button class="icon f-test"></button>
+      <button class="icon f-del" title="Удалить команду" aria-label="Удалить команду" data-en-title="Delete the command" data-en-aria-label="Delete the command"></button>
+    </div>
+    <div class="opts">
+      <label class="vol"><span data-en="Volume">Громкость</span> <input type="range" class="f-volume" min="0" max="200" step="1"><output class="f-volume-val">100%</output></label>
+      <label><span data-en="Output">Вывод</span> <select class="f-device"></select></label>
+      <label><span data-en="Cooldown">Кулдаун</span> <input type="number" class="f-cooldown" min="0" max="3600" step="1"> <span data-en="s">сек.</span></label>
+    </div>
+    <div class="note"></div>
+  </div>
+</template>
+
+<template id="videoTpl">
+  <div class="cmd vcmd">
+    <label class="switch sw" title="Включить / выключить команду" data-en-title="Turn the command on / off"><input type="checkbox" class="f-enabled" aria-label="Команда включена" data-en-aria-label="Command on"><span></span></label>
+    <input type="text" class="f-trigger" placeholder="!команда" data-en-placeholder="!command" spellcheck="false" autocomplete="off" aria-label="Команда" data-en-aria-label="Command">
+    <div class="file">
+      <input type="text" class="f-file" placeholder="Путь к видео: mp4, webm, mov, mkv" data-en-placeholder="Video file path: mp4, webm, mov, mkv" spellcheck="false" autocomplete="off" aria-label="Видеофайл" data-en-aria-label="Video file">
+      <button class="f-browse" data-en="Browse…">Обзор…</button>
+    </div>
+    <div class="actions">
+      <button class="icon f-test"></button>
+      <button class="icon f-del" title="Удалить команду" aria-label="Удалить команду" data-en-title="Delete the command" data-en-aria-label="Delete the command"></button>
+    </div>
+    <div class="opts">
+      <label class="vol"><span data-en="Volume">Громкость</span> <input type="range" class="f-volume" min="0" max="200" step="1"><output class="f-volume-val">100%</output></label>
+      <label class="vol"><span data-en="Scale">Масштаб</span> <input type="range" class="f-scale" min="5" max="100" step="1"><output class="f-scale-val">100%</output></label>
+      <label><span data-en="Cooldown">Кулдаун</span> <input type="number" class="f-cooldown" min="0" max="3600" step="1"> <span data-en="s">сек.</span></label>
+    </div>
+    <div class="place">
+      <div class="stage" title="Перетащите видео, чтобы выбрать место" data-en-title="Drag the video to choose its position">
+        <div class="vrect"><video class="thumb" muted preload="auto" playsinline crossorigin="anonymous"></video><canvas class="thumb-keyed"></canvas><span class="vrect-label">?</span></div>
+      </div>
+      <div class="place-side">
+        <div class="place-title" data-en="Where the video appears">Где появится видео</div>
+        <div class="anchors" role="group" aria-label="Расположение" data-en-aria-label="Position"></div>
+        <label class="check"><input type="checkbox" class="f-random"><span data-en="Random position&lt;small&gt;A new place in the frame each time&lt;/small&gt;">Случайное место<small>Каждый раз в новом месте кадра</small></span></label>
+        <div class="vinfo"></div>
+      </div>
+    </div>
+    <div class="keying">
+      <label class="check"><input type="checkbox" class="f-key"><span data-en="Transparent color (chroma key)&lt;small&gt;Removes a background of the chosen color from the video — a green screen, for example. The result shows on the preview.&lt;/small&gt;">Прозрачный цвет (хромакей)<small>Убирает из видео фон заданного цвета — например, зелёный экран. Результат виден на схеме.</small></span></label>
+      <div class="key-opts">
+        <div class="row">
+          <input type="color" class="f-key-color" aria-label="Прозрачный цвет" data-en-aria-label="Transparent color">
+          <input type="text" class="f-key-hex" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Прозрачный цвет, hex" data-en-aria-label="Transparent color, hex">
+          <button class="f-pick" title="Нажмите, затем щёлкните по видео на схеме" data-en-title="Click, then click the video on the preview" data-en="Eyedropper">Пипетка</button>
+          <button class="ghost f-key-green" data-en="Green">Зелёный</button>
+          <button class="ghost f-key-blue" data-en="Blue">Синий</button>
+        </div>
+        <div class="key-sliders">
+          <label class="vol" title="Насколько цвет может отличаться от выбранного, чтобы стать прозрачным" data-en-title="How far a color may differ from the chosen one to become transparent"><span data-en="Similarity">Сходство</span> <input type="range" class="f-similarity" min="1" max="1000" step="1"><output class="f-similarity-val"></output></label>
+          <label class="vol" title="Мягкость края прозрачности" data-en-title="Softness of the transparent edge"><span data-en="Smoothness">Гладкость</span> <input type="range" class="f-smoothness" min="1" max="1000" step="1"><output class="f-smoothness-val"></output></label>
+          <label class="vol" title="Убирает цветную кайму вокруг объекта" data-en-title="Removes the colored fringe around the subject"><span data-en="Key Color Spill Reduction">Подавление ореола</span> <input type="range" class="f-spill" min="1" max="1000" step="1"><output class="f-spill-val"></output></label>
+        </div>
+      </div>
+    </div>
+    <div class="note"></div>
+  </div>
+</template>
+
+<template id="gifTpl">
+  <div class="cmd vcmd gcmd">
+    <label class="switch sw" title="Включить / выключить команду" data-en-title="Turn the command on / off"><input type="checkbox" class="f-enabled" aria-label="Команда включена" data-en-aria-label="Command on"><span></span></label>
+    <input type="text" class="f-trigger" placeholder="!команда" data-en-placeholder="!command" spellcheck="false" autocomplete="off" aria-label="Команда" data-en-aria-label="Command">
+    <div class="file">
+      <input type="text" class="f-file" placeholder="Картинка: gif, webp, apng" data-en-placeholder="Picture: gif, webp, apng" spellcheck="false" autocomplete="off" aria-label="Картинка" data-en-aria-label="Picture">
+      <button class="f-browse" data-en="Browse…">Обзор…</button>
+    </div>
+    <div class="actions">
+      <button class="icon f-test"></button>
+      <button class="icon f-del" title="Удалить команду" aria-label="Удалить команду" data-en-title="Delete the command" data-en-aria-label="Delete the command"></button>
+    </div>
+    <div class="file sound-file">
+      <input type="text" class="f-sound" placeholder="Звук: mp3, wav, ogg, flac — необязательно" data-en-placeholder="Sound: mp3, wav, ogg, flac — optional" spellcheck="false" autocomplete="off" aria-label="Звук" data-en-aria-label="Sound">
+      <button class="f-browse-sound" data-en="Browse…">Обзор…</button>
+    </div>
+    <div class="opts">
+      <label class="vol"><span data-en="Volume">Громкость</span> <input type="range" class="f-volume" min="0" max="200" step="1"><output class="f-volume-val">100%</output></label>
+      <label class="vol"><span data-en="Scale">Масштаб</span> <input type="range" class="f-scale" min="5" max="100" step="1"><output class="f-scale-val">100%</output></label>
+      <label title="0 — пока играет звук" data-en-title="0 — while the sound plays"><span data-en="Show for">Показывать</span> <input type="number" class="f-duration" min="0" max="600" step="1"> <span data-en="s">сек.</span></label>
+      <label><span data-en="Cooldown">Кулдаун</span> <input type="number" class="f-cooldown" min="0" max="3600" step="1"> <span data-en="s">сек.</span></label>
+    </div>
+    <div class="place">
+      <div class="stage" title="Перетащите картинку, чтобы выбрать место" data-en-title="Drag the picture to choose its position">
+        <div class="vrect"><img class="thumb" crossorigin="anonymous" alt=""><canvas class="thumb-keyed"></canvas><span class="vrect-label">?</span></div>
+      </div>
+      <div class="place-side">
+        <div class="place-title" data-en="Where the picture appears">Где появится картинка</div>
+        <div class="anchors" role="group" aria-label="Расположение" data-en-aria-label="Position"></div>
+        <label class="check"><input type="checkbox" class="f-random"><span data-en="Random position&lt;small&gt;A new place in the frame each time&lt;/small&gt;">Случайное место<small>Каждый раз в новом месте кадра</small></span></label>
+        <div class="vinfo"></div>
+      </div>
+    </div>
+    <div class="keying">
+      <label class="check"><input type="checkbox" class="f-key"><span data-en="Transparent color (chroma key)&lt;small&gt;Removes a background of the chosen color from the picture. The result shows on the preview.&lt;/small&gt;">Прозрачный цвет (хромакей)<small>Убирает из картинки фон заданного цвета. Результат виден на схеме.</small></span></label>
+      <div class="key-opts">
+        <div class="row">
+          <input type="color" class="f-key-color" aria-label="Прозрачный цвет" data-en-aria-label="Transparent color">
+          <input type="text" class="f-key-hex" maxlength="7" spellcheck="false" autocomplete="off" aria-label="Прозрачный цвет, hex" data-en-aria-label="Transparent color, hex">
+          <button class="f-pick" title="Нажмите, затем щёлкните по картинке на схеме" data-en-title="Click, then click the picture on the preview" data-en="Eyedropper">Пипетка</button>
+          <button class="ghost f-key-green" data-en="Green">Зелёный</button>
+          <button class="ghost f-key-blue" data-en="Blue">Синий</button>
+        </div>
+        <div class="key-sliders">
+          <label class="vol" title="Насколько цвет может отличаться от выбранного, чтобы стать прозрачным" data-en-title="How far a color may differ from the chosen one to become transparent"><span data-en="Similarity">Сходство</span> <input type="range" class="f-similarity" min="1" max="1000" step="1"><output class="f-similarity-val"></output></label>
+          <label class="vol" title="Мягкость края прозрачности" data-en-title="Softness of the transparent edge"><span data-en="Smoothness">Гладкость</span> <input type="range" class="f-smoothness" min="1" max="1000" step="1"><output class="f-smoothness-val"></output></label>
+          <label class="vol" title="Убирает цветную кайму вокруг объекта" data-en-title="Removes the colored fringe around the subject"><span data-en="Key Color Spill Reduction">Подавление ореола</span> <input type="range" class="f-spill" min="1" max="1000" step="1"><output class="f-spill-val"></output></label>
+        </div>
+      </div>
+    </div>
+    <div class="note"></div>
+  </div>
+</template>
+
+<script>/*chroma.js*/</script>
+<script>
+"use strict";
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => root.querySelectorAll(sel);
+
+// ---------- language ----------
+// The UI is in English (default) or Russian; switching reloads the page. The
+// markup is written in Russian and carries the English in data-en (innerHTML),
+// data-en-title, data-en-placeholder and data-en-aria-label; texts built in
+// code pick theirs with L(en, ru).
+let LANG = "en";
+const L = (en, ru) => LANG === "ru" ? ru : en;
+
+const EN_ATTRS = [["title", "enTitle"], ["placeholder", "enPlaceholder"], ["aria-label", "enAriaLabel"]];
+
+function applyLang(root = document) {
+  if (LANG !== "en") return;
+  for (const e of $$("[data-en]", root)) e.innerHTML = e.dataset.en;
+  for (const [attr, key] of EN_ATTRS) {
+    for (const e of $$(`[data-en-${attr}]`, root)) e.setAttribute(attr, e.dataset[key]);
+  }
+  if (root === document) for (const t of $$("template")) applyLang(t.content);
+}
+
+// The page stays hidden until init has put it in its language; this keeps a
+// failed init from leaving it blank.
+setTimeout(() => { if (!document.documentElement.lang) document.documentElement.lang = "en"; }, 2000);
+
+const S = {
+  cfg: null,
+  devices: [],
+  status: { state: "disconnected", channel: "", message: "" },
+  missing: new Set(),
+  playing: "",          // id of the command whose sound or video is playing
+  mediaBase: "",        // URL prefix for video files (thumbnails)
+  videoWindowOpen: false,
+  obsUrl: "",           // address for the OBS browser source
+  obsPages: 0,          // connected browser sources
+  points: {},           // channel points status from Go
+  pointsUri: "",        // twitch.tv/activate link while logging in
+  rewards: { list: [], state: "idle", error: "" }, // the channel's rewards from Twitch
+};
+
+// What a list holds: a sound, a video or a GIF with sound. field is the main
+// file, browse the kind of file the "Обзор…" dialog offers. Texts are
+// functions: the language is known only once init runs.
+const KINDS = {
+  commands: {
+    tpl: "#cmdTpl", pick: () => L("Choose a sound file.", "Выберите звуковой файл."), testTitle: () => L("Test the sound", "Проверить звук"),
+    field: "file", browse: "sound", test: c => goTest(c),
+  },
+  videos: {
+    tpl: "#videoTpl", pick: () => L("Choose a video file.", "Выберите видеофайл."), testTitle: () => L("Show in OBS", "Показать в OBS"),
+    field: "file", browse: "video", test: c => goTestVideo(c),
+  },
+  gifs: {
+    tpl: "#gifTpl", pick: () => L("Choose a picture.", "Выберите картинку."), testTitle: () => L("Show in OBS", "Показать в OBS"),
+    field: "image", browse: "image", test: c => goTestGif(c),
+  },
+};
+
+// The lists: chat commands, and channel point rewards (group "points") whose
+// trigger is the reward's title — chat messages never run those.
+const LISTS = {
+  commands: {
+    ...KINDS.commands, base: "commands", group: "chat", items: () => S.cfg.commands,
+    list: "#cmdList", count: "#cmdCount", tabCount: "#tabSoundsCount", topCount: "#tabChatCount",
+    empty: () => L("No sound commands yet — click “Add command”.", "Звуковых команд пока нет — нажмите «Добавить команду»."),
+  },
+  videos: {
+    ...KINDS.videos, base: "videos", group: "chat", items: () => S.cfg.videos,
+    list: "#videoList", count: "#videoCount", tabCount: "#tabVideosCount", topCount: "#tabChatCount",
+    empty: () => L("No video commands yet — click “Add video”.", "Видео-команд пока нет — нажмите «Добавить видео»."),
+  },
+  gifs: {
+    ...KINDS.gifs, base: "gifs", group: "chat", items: () => S.cfg.gifs,
+    list: "#gifList", count: "#gifCount", tabCount: "#tabGifsCount", topCount: "#tabChatCount",
+    empty: () => L("No GIF commands yet — click “Add GIF”.", "GIF-команд пока нет — нажмите «Добавить GIF»."),
+  },
+  rewardSounds: {
+    ...KINDS.commands, base: "commands", group: "points", items: () => S.cfg.rewards.sounds,
+    list: "#rewardSoundList", count: "#rewardSoundCount", tabCount: "#tabRewardSoundsCount", topCount: "#tabRewardsCount",
+    empty: () => L("No sounds for points yet — click “Add sound”.", "Звуков за баллы пока нет — нажмите «Добавить звук»."),
+  },
+  rewardVideos: {
+    ...KINDS.videos, base: "videos", group: "points", items: () => S.cfg.rewards.videos,
+    list: "#rewardVideoList", count: "#rewardVideoCount", tabCount: "#tabRewardVideosCount", topCount: "#tabRewardsCount",
+    empty: () => L("No videos for points yet — click “Add video”.", "Видео за баллы пока нет — нажмите «Добавить видео»."),
+  },
+  rewardGifs: {
+    ...KINDS.gifs, base: "gifs", group: "points", items: () => S.cfg.rewards.gifs,
+    list: "#rewardGifList", count: "#rewardGifCount", tabCount: "#tabRewardGifsCount", topCount: "#tabRewardsCount",
+    empty: () => L("No GIFs for points yet — click “Add GIF”.", "GIF за баллы пока нет — нажмите «Добавить GIF»."),
+  },
+};
+
+const itemsOf = kind => LISTS[kind].items();
+const kindOfRow = row => row.dataset.kind;
+const isReward = kind => LISTS[kind].group === "points";
+// Reward titles match like this in Go: case, spaces and a leading "!" don't matter.
+const rewardKey = t => normTrigger(t).replace(/^!/, "");
+
+// The stage thumbnail is a <video> for videos and an <img> for GIFs.
+const thumbSize = el => [el.videoWidth || el.naturalWidth || 0, el.videoHeight || el.naturalHeight || 0];
+const thumbReady = el => !!el.getAttribute("src") && (el.tagName === "VIDEO" ? el.readyState >= 2 : el.complete) && thumbSize(el)[0] > 0;
+
+const PLAY_ICON = '<svg viewBox="0 0 16 16"><path d="M4.5 2.8v10.4L13 8z" fill="currentColor"/></svg>';
+const STOP_ICON = '<svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor"/></svg>';
+const DEL_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>';
+
+const RES_PRESETS = [
+  [1920, 1080, () => "1920 × 1080 — Full HD"],
+  [2560, 1440, () => "2560 × 1440 — 2K"],
+  [3840, 2160, () => "3840 × 2160 — 4K"],
+  [1280, 720, () => "1280 × 720 — HD"],
+  [1080, 1920, () => L("1080 × 1920 — vertical", "1080 × 1920 — вертикальное")],
+];
+
+const ANCHORS = [
+  [0, 0, () => L("Top left", "Слева вверху")], [0.5, 0, () => L("Top center", "Сверху по центру")], [1, 0, () => L("Top right", "Справа вверху")],
+  [0, 0.5, () => L("Middle left", "Слева по центру")], [0.5, 0.5, () => L("Center", "По центру")], [1, 0.5, () => L("Middle right", "Справа по центру")],
+  [0, 1, () => L("Bottom left", "Слева внизу")], [0.5, 1, () => L("Bottom center", "Снизу по центру")], [1, 1, () => L("Bottom right", "Справа внизу")],
+];
+
+// ---------- helpers ----------
+function newId() {
+  return Array.from({ length: 12 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+}
+
+const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+let toastTimer = 0;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = String(msg);
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 4500);
+}
+
+function setRangeFill(r) {
+  r.style.setProperty("--p", (100 * (r.value - r.min) / (r.max - r.min)) + "%");
+}
+
+let saveTimer = 0;
+function scheduleSave(delay = 300) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, delay);
+}
+function saveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  return goSaveConfig(S.cfg).then(missing => {
+    S.missing = new Set(missing || []);
+    refreshNotes();
+    refreshThumbs();
+  }).catch(toast);
+}
+window.addEventListener("beforeunload", () => { if (saveTimer) saveNow(); });
+
+function findItem(id) {
+  for (const kind of Object.keys(LISTS)) {
+    const cmd = itemsOf(kind).find(c => c.id === id);
+    if (cmd) return { kind, cmd };
+  }
+  return null;
+}
+const rowOf = id => document.querySelector(`.cmd[data-id="${id}"]`);
+
+// ---------- devices ----------
+function fillDeviceSelect(sel, value, emptyLabel) {
+  sel.replaceChildren();
+  const add = (v, text) => { const o = document.createElement("option"); o.value = v; o.textContent = text; sel.append(o); };
+  add("", emptyLabel);
+  for (const d of S.devices) add(d.id, d.name + (d.default ? L("  (system)", "  (системное)") : ""));
+  if (value && !S.devices.some(d => d.id === value)) add(value, L("⚠ Device unavailable", "⚠ Устройство недоступно"));
+  sel.value = value || "";
+}
+
+function renderDevices() {
+  fillDeviceSelect($("#device"), S.cfg.device, L("System default device", "Системное устройство по умолчанию"));
+  for (const row of $$(".cmd")) {
+    const item = findItem(row.dataset.id), sel = $(".f-device", row);
+    if (item && sel) fillDeviceSelect(sel, item.cmd.device, L("Common device", "Общее устройство"));
+  }
+}
+
+// ---------- status ----------
+const STATUS_TEXT = {
+  disconnected: () => L("Not connected", "Не подключено"),
+  connecting: s => L(`Connecting to #${s.channel}…`, `Подключение к #${s.channel}…`),
+  connected: s => L(`In chat #${s.channel}`, `В чате #${s.channel}`),
+  reconnecting: s => L(`Reconnecting to #${s.channel}…`, `Переподключение к #${s.channel}…`),
+};
+
+function renderStatus() {
+  const s = S.status;
+  $("#statusPill").dataset.state = s.state;
+  $("#statusText").textContent = (STATUS_TEXT[s.state] || STATUS_TEXT.disconnected)(s);
+  $("#statusMessage").textContent = s.state === "reconnecting" ? s.message : "";
+  const btn = $("#connectBtn");
+  const idle = s.state === "disconnected";
+  btn.textContent = idle ? L("Connect", "Подключиться") : L("Disconnect", "Отключиться");
+  btn.classList.toggle("primary", idle);
+}
+
+// ---------- tabs ----------
+// The open tab is kept in the settings: the page has no persistent storage.
+function selectTab(name) {
+  for (const b of $$("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  for (const p of $$(".tab-panel")) p.hidden = p.dataset.panel !== name;
+  if (name === "obs") requestAnimationFrame(() => scrollToEnd($("#obsUrl"))); // show the URL's end
+  if (S.cfg.tab !== name) {
+    S.cfg.tab = name;
+    scheduleSave(0);
+  }
+}
+
+// selectSubTab picks sounds, videos or GIFs inside the "Чат" (group chat) or
+// "Баллы канала" (group rewards) tab.
+function selectSubTab(group, name) {
+  for (const b of $$(`nav[data-group="${group}"] [data-subtab]`)) b.setAttribute("aria-selected", String(b.dataset.subtab === name));
+  for (const p of $$(`.sub-panel[data-group="${group}"]`)) p.hidden = p.dataset.subpanel !== name;
+  const key = group === "chat" ? "chatTab" : "rewardsTab";
+  if (S.cfg[key] !== name) {
+    S.cfg[key] = name;
+    scheduleSave(0);
+  }
+}
+
+const SUB_OF_BASE = { commands: "sounds", videos: "videos", gifs: "gifs" };
+
+// reveal opens the tab and sub-tab a list lives in.
+function reveal(kind) {
+  const group = isReward(kind) ? "rewards" : "chat";
+  selectTab(group);
+  selectSubTab(group, SUB_OF_BASE[LISTS[kind].base]);
+}
+
+// ---------- commands ----------
+function updateCounts() {
+  const tabs = {};
+  for (const [kind, spec] of Object.entries(LISTS)) {
+    const items = itemsOf(kind);
+    const on = items.filter(c => c.enabled).length;
+    $(spec.count).textContent = items.length ? L(`${on} of ${items.length} on`, `${on} из ${items.length} включено`) : "";
+    for (const sel of [spec.tabCount, spec.topCount]) if (sel) tabs[sel] = (tabs[sel] ?? 0) + items.length;
+  }
+  for (const [sel, n] of Object.entries(tabs)) $(sel).textContent = n ? String(n) : "";
+}
+
+function normTrigger(t) { return t.trim().toLowerCase().split(/\s+/).join(" "); }
+
+// Within chat commands and within rewards, sounds are matched first, then
+// videos, then GIFs, so a duplicate anywhere below the first one never fires.
+function refreshNotes() {
+  const seen = { chat: new Map(), points: new Map() };
+  for (const kind of Object.keys(LISTS)) {
+    const spec = LISTS[kind], reward = isReward(kind), group = seen[spec.group];
+    for (const cmd of itemsOf(kind)) {
+      const row = rowOf(cmd.id);
+      if (!row) continue;
+      const key = reward ? rewardKey(cmd.trigger) : normTrigger(cmd.trigger);
+      const notes = [];
+      const dup = key && group.has(key);
+      if (dup) {
+        const first = group.get(key);
+        notes.push(reward
+          ? L(`A reward with this title is already above (“${first}”) — only that one fires.`,
+            `Награда с таким названием уже есть выше («${first}») — сработает только она.`)
+          : L(`This command is already above (“${first}”) — only that one fires.`,
+            `Такая команда уже есть выше («${first}») — сработает только она.`));
+      } else if (key) {
+        group.set(key, cmd.trigger.trim());
+      }
+      if (!key) {
+        notes.push(reward
+          ? L("Enter the reward's title — as on Twitch.", "Укажите название награды — как на Twitch.")
+          : L("Enter a command, for example !sad", "Укажите команду, например !sad"));
+      }
+      const missing = S.missing.has(cmd.id);
+      if (missing) notes.push(L("File not found.", "Файл не найден."));
+      else if (!cmd[spec.field]) notes.push(spec.pick());
+      if (spec.base === "gifs") {
+        const soundMissing = S.missing.has(cmd.id + "/sound");
+        if (soundMissing) notes.push(L("Sound file not found.", "Звуковой файл не найден."));
+        $(".f-sound", row).classList.toggle("missing", soundMissing);
+      }
+      $(".f-trigger", row).classList.toggle("dup", dup);
+      $(".f-file", row).classList.toggle("missing", missing);
+      $(".note", row).textContent = notes.join(" ");
+    }
+  }
+  updateCounts();
+  renderRewardTable(); // which rewards are set up may have changed
+}
+
+function scrollToEnd(input) { input.scrollLeft = input.scrollWidth; }
+
+function bindRange(row, sel, cmd, field, after, unit = "%") {
+  const r = $(sel, row), out = $(sel + "-val", row);
+  r.value = cmd[field];
+  out.textContent = cmd[field] + unit;
+  setRangeFill(r);
+  r.addEventListener("input", () => {
+    cmd[field] = +r.value;
+    out.textContent = cmd[field] + unit;
+    setRangeFill(r);
+    if (after) after();
+    scheduleSave();
+  });
+}
+
+function buildRow(kind, cmd) {
+  const spec = LISTS[kind];
+  const row = $(spec.tpl).content.firstElementChild.cloneNode(true);
+  row.dataset.id = cmd.id;
+  row.dataset.kind = kind;
+  row.classList.toggle("off", !cmd.enabled);
+  if (isReward(kind)) {
+    // A reward's trigger is its title on Twitch; Twitch has its own cooldowns.
+    const t = $(".f-trigger", row);
+    t.placeholder = L("Reward title", "Название награды");
+    t.setAttribute("list", "rewardTitles"); // the channel's reward titles
+    t.setAttribute("aria-label", t.placeholder);
+    $(".f-cooldown", row).closest("label").hidden = true;
+  }
+
+  const enabled = $(".f-enabled", row);
+  enabled.checked = cmd.enabled;
+  enabled.addEventListener("change", () => {
+    cmd.enabled = enabled.checked;
+    row.classList.toggle("off", !cmd.enabled);
+    updateCounts();
+    scheduleSave(0);
+  });
+
+  const trigger = $(".f-trigger", row);
+  trigger.value = cmd.trigger;
+  trigger.addEventListener("input", () => { cmd.trigger = trigger.value; refreshNotes(); scheduleSave(); });
+  trigger.addEventListener("blur", () => { trigger.value = cmd.trigger = cmd.trigger.trim(); });
+
+  bindFile(row, ".f-file", ".f-browse", cmd, spec.field, spec.browse);
+  if (spec.base === "gifs") {
+    bindFile(row, ".f-sound", ".f-browse-sound", cmd, "sound", "sound");
+    const dur = $(".f-duration", row);
+    dur.value = cmd.duration;
+    dur.addEventListener("input", () => { cmd.duration = clampNum(Math.floor(+dur.value || 0), 0, 600); scheduleSave(); });
+    dur.addEventListener("blur", () => { dur.value = cmd.duration; });
+  }
+
+  bindRange(row, ".f-volume", cmd, "volume");
+
+  const cd = $(".f-cooldown", row);
+  cd.value = cmd.cooldown;
+  cd.addEventListener("input", () => { cmd.cooldown = clampNum(Math.floor(+cd.value || 0), 0, 3600); scheduleSave(); });
+  cd.addEventListener("blur", () => { cd.value = cmd.cooldown; });
+
+  const test = $(".f-test", row);
+  test.innerHTML = PLAY_ICON;
+  test.title = spec.testTitle();
+  test.setAttribute("aria-label", test.title);
+  test.addEventListener("click", () => {
+    if (S.playing === cmd.id) goStop();
+    else spec.test(cmd).catch(toast);
+  });
+
+  const del = $(".f-del", row);
+  del.innerHTML = DEL_ICON;
+  let armTimer = 0;
+  const disarm = () => { del.classList.remove("danger-armed"); del.innerHTML = DEL_ICON; };
+  del.addEventListener("click", () => {
+    if (!del.classList.contains("danger-armed")) {
+      del.classList.add("danger-armed");
+      del.textContent = L("Delete?", "Удалить?");
+      armTimer = setTimeout(disarm, 3000);
+      return;
+    }
+    clearTimeout(armTimer);
+    const items = itemsOf(kind);
+    items.splice(items.indexOf(cmd), 1);
+    row.remove();
+    if (!items.length) renderList(kind);
+    refreshNotes();
+    scheduleSave(0);
+  });
+
+  if (spec.base === "commands") {
+    const dev = $(".f-device", row);
+    fillDeviceSelect(dev, cmd.device, L("Common device", "Общее устройство"));
+    dev.addEventListener("change", () => { cmd.device = dev.value; scheduleSave(0); });
+  } else {
+    buildPlacement(row, cmd);
+  }
+  return row;
+}
+
+// bindFile ties a path input and its "Обзор…" button to cmd[field].
+function bindFile(row, inputSel, browseSel, cmd, field, browse) {
+  const input = $(inputSel, row);
+  input.value = input.title = cmd[field];
+  input.addEventListener("input", () => {
+    cmd[field] = input.value.trim().replace(/^"|"$/g, "");
+    input.title = cmd[field];
+    scheduleSave(500);
+  });
+  input.addEventListener("blur", () => scrollToEnd(input));
+  requestAnimationFrame(() => scrollToEnd(input));
+  $(browseSel, row).addEventListener("click", () => goBrowse(cmd.id, field, cmd[field], browse));
+}
+
+function renderList(kind) {
+  const spec = LISTS[kind];
+  const list = $(spec.list);
+  list.replaceChildren();
+  if (!itemsOf(kind).length) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = spec.empty();
+    list.append(e);
+  }
+  for (const cmd of itemsOf(kind)) list.append(buildRow(kind, cmd));
+}
+
+// addItem adds an entry to a list. With a reward title (from the "Награды
+// канала" list) it is filled in and the file dialog opens straight away.
+function addItem(kind, rewardTitle) {
+  reveal(kind); // adding from the reward list may happen on another sub-tab
+  const base = {
+    id: newId(), enabled: true, trigger: rewardTitle ?? (isReward(kind) ? "" : "!"),
+    volume: 100, cooldown: isReward(kind) ? 0 : 5,
+  };
+  const look = {
+    scale: 100, random: false, x: 0.5, y: 0.5,
+    key: false, keyColor: "#00ff00", similarity: 400, smoothness: 80, spill: 100,
+  };
+  const cmd = {
+    commands: { ...base, file: "", device: "" },
+    videos: { ...base, file: "", ...look },
+    gifs: { ...base, image: "", sound: "", duration: 0, ...look },
+  }[LISTS[kind].base];
+  const list = $(LISTS[kind].list);
+  const items = itemsOf(kind);
+  if (!items.length) list.replaceChildren();
+  items.push(cmd);
+  const row = buildRow(kind, cmd);
+  list.append(row);
+  refreshNotes();
+  if (rewardTitle) {
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    const spec = LISTS[kind];
+    saveNow().then(() => goBrowse(cmd.id, spec.field, "", spec.browse));
+    return;
+  }
+  const t = $(".f-trigger", row);
+  t.focus();
+  t.setSelectionRange(t.value.length, t.value.length);
+  row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  scheduleSave();
+}
+
+// ---------- video placement ----------
+// Mirrors overlay.html: the video is fitted into the window, scaled, and x/y
+// place it within the free space. Fractions are of the window size.
+function videoGeom(row, cmd) {
+  const W = S.cfg.video.width, H = S.cfg.video.height;
+  const vw = row._meta ? row._meta.w : 16, vh = row._meta ? row._meta.h : 9;
+  const k = Math.min(W / vw, H / vh) * cmd.scale / 100;
+  const w = vw * k / W, h = vh * k / H;
+  return { w, h, left: (1 - w) * cmd.x, top: (1 - h) * cmd.y };
+}
+
+function renderStage(row, cmd) {
+  const stage = $(".stage", row);
+  stage.style.aspectRatio = `${S.cfg.video.width} / ${S.cfg.video.height}`;
+  stage.classList.toggle("random", cmd.random);
+  const g = videoGeom(row, cmd);
+  const left = cmd.random ? (1 - g.w) / 2 : g.left;
+  const top = cmd.random ? (1 - g.h) / 2 : g.top;
+  Object.assign($(".vrect", row).style, {
+    left: left * 100 + "%", top: top * 100 + "%", width: g.w * 100 + "%", height: g.h * 100 + "%",
+  });
+  for (const b of $$(".anchors button", row)) {
+    b.disabled = cmd.random;
+    b.classList.toggle("on", !cmd.random && +b.dataset.x === cmd.x && +b.dataset.y === cmd.y);
+  }
+}
+
+function renderAllStages() {
+  for (const row of $$(".vcmd")) {
+    const item = findItem(row.dataset.id);
+    if (item) renderStage(row, item.cmd);
+  }
+}
+
+// Snap to the edges and the centre so exact placement is easy by hand.
+function snap(v) {
+  for (const t of [0, 0.5, 1]) if (Math.abs(v - t) < 0.03) return t;
+  return Math.round(v * 1000) / 1000;
+}
+
+function fmtDuration(sec) {
+  if (!isFinite(sec)) return "";
+  const s = Math.round(sec);
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+
+function setInfo(row, text, bad) {
+  const info = $(".vinfo", row);
+  info.textContent = text;
+  info.classList.toggle("bad", !!bad);
+}
+
+// Thumbnails come from the app's local server, which looks files up by id in
+// the saved settings — so they're (re)loaded after a save.
+function loadThumb(row, cmd, file) {
+  row._thumbFile = file;
+  row._meta = null;
+  const v = $(".thumb", row);
+  if (!file) {
+    v.removeAttribute("src");
+    if (v.load) v.load();
+    setInfo(row, "");
+  } else {
+    setInfo(row, L("Loading…", "Загрузка…"));
+    const version = "?v=" + encodeURIComponent(file);
+    v.src = LISTS[kindOfRow(row)].base === "gifs"
+      ? S.mediaBase + cmd.id + "/image" + version
+      : S.mediaBase + cmd.id + version + "#t=0.5"; // a frame half a second in
+  }
+  renderStage(row, cmd);
+  renderKeyPreview(row, cmd);
+}
+
+function refreshThumbs() {
+  for (const row of $$(".vcmd")) {
+    const item = findItem(row.dataset.id);
+    if (!item) continue;
+    const file = item.cmd[LISTS[item.kind].field];
+    const want = file && !S.missing.has(item.cmd.id) ? file : "";
+    if (row._thumbFile !== want) loadThumb(row, item.cmd, want);
+  }
+}
+
+function buildPlacement(row, cmd) {
+  bindRange(row, ".f-scale", cmd, "scale", () => renderStage(row, cmd));
+
+  const random = $(".f-random", row);
+  random.checked = cmd.random;
+  random.addEventListener("change", () => { cmd.random = random.checked; renderStage(row, cmd); scheduleSave(0); });
+
+  const anchors = $(".anchors", row);
+  for (const [x, y, title] of ANCHORS) {
+    const b = document.createElement("button");
+    b.dataset.x = x;
+    b.dataset.y = y;
+    b.title = title();
+    b.setAttribute("aria-label", b.title);
+    b.addEventListener("click", () => { cmd.x = x; cmd.y = y; renderStage(row, cmd); scheduleSave(0); });
+    anchors.append(b);
+  }
+
+  const stage = $(".stage", row), rect = $(".vrect", row);
+  rect.addEventListener("pointerdown", e => {
+    if (e.button !== 0) return;
+    if (stage.classList.contains("picking")) {
+      e.preventDefault();
+      pickKeyColor(row, cmd, e);
+      return;
+    }
+    if (cmd.random) return;
+    e.preventDefault();
+    rect.setPointerCapture(e.pointerId);
+    rect.classList.add("dragging");
+    const box = stage.getBoundingClientRect();
+    const g = videoGeom(row, cmd);
+    const start = { x: e.clientX, y: e.clientY, left: g.left, top: g.top };
+    const move = ev => {
+      if (g.w < 0.999) cmd.x = snap(clampNum(start.left + (ev.clientX - start.x) / box.width, 0, 1 - g.w) / (1 - g.w));
+      if (g.h < 0.999) cmd.y = snap(clampNum(start.top + (ev.clientY - start.y) / box.height, 0, 1 - g.h) / (1 - g.h));
+      renderStage(row, cmd);
+    };
+    const up = () => {
+      rect.classList.remove("dragging");
+      rect.removeEventListener("pointermove", move);
+      rect.removeEventListener("pointerup", up);
+      rect.removeEventListener("pointercancel", up);
+      scheduleSave(0);
+    };
+    rect.addEventListener("pointermove", move);
+    rect.addEventListener("pointerup", up);
+    rect.addEventListener("pointercancel", up);
+  });
+
+  const v = $(".thumb", row);
+  if (v.tagName === "VIDEO") {
+    v.addEventListener("loadedmetadata", () => {
+      if (!v.videoWidth) { setInfo(row, L("The file has no video track", "В файле нет видеодорожки"), true); return; }
+      row._meta = { w: v.videoWidth, h: v.videoHeight };
+      setInfo(row, `${v.videoWidth}×${v.videoHeight} · ${fmtDuration(v.duration)}`);
+      renderStage(row, cmd);
+    });
+    // The frame shown on the stage (0.5 s in) is what the key preview uses.
+    v.addEventListener("loadeddata", () => renderKeyPreview(row, cmd));
+    v.addEventListener("seeked", () => renderKeyPreview(row, cmd));
+  } else {
+    v.addEventListener("load", () => {
+      if (!v.getAttribute("src")) return;
+      row._meta = { w: v.naturalWidth, h: v.naturalHeight };
+      setInfo(row, `${v.naturalWidth}×${v.naturalHeight}`);
+      renderStage(row, cmd);
+      renderKeyPreview(row, cmd);
+    });
+  }
+  v.addEventListener("error", () => {
+    if (!v.getAttribute("src")) return;
+    row._meta = null;
+    setInfo(row, v.tagName === "VIDEO"
+      ? L("Can't open the video — format or codec not supported", "Не удалось открыть видео — формат или кодек не поддерживается")
+      : L("Can't open the picture", "Не удалось открыть картинку"), true);
+    renderStage(row, cmd);
+  });
+
+  bindKeying(row, cmd);
+  row._thumbFile = null;
+  renderStage(row, cmd);
+}
+
+// ---------- chroma key ----------
+let previewKeyer; // one WebGL context for all rows' previews
+
+function keyOf(cmd) {
+  return { color: cmd.keyColor, similarity: cmd.similarity, smoothness: cmd.smoothness, spill: cmd.spill };
+}
+
+// renderKeyPreview shows the stage frame with the key colour removed, over
+// a checkerboard.
+function renderKeyPreview(row, cmd) {
+  const rect = $(".vrect", row), v = $(".thumb", row), out = $(".thumb-keyed", row);
+  const ready = cmd.key && thumbReady(v);
+  rect.classList.toggle("keyed", !!ready);
+  if (!ready) return;
+  if (previewKeyer === undefined) previewKeyer = createKeyer(true);
+  if (!previewKeyer) { rect.classList.remove("keyed"); return; }
+  const [vw, vh] = thumbSize(v);
+  const k = Math.min(1, 480 / vw);
+  const w = Math.max(1, Math.round(vw * k)), h = Math.max(1, Math.round(vh * k));
+  try {
+    previewKeyer.draw(v, w, h, keyOf(cmd));
+  } catch {
+    rect.classList.remove("keyed");
+    return;
+  }
+  out.width = w;
+  out.height = h;
+  const ctx = out.getContext("2d");
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(previewKeyer.canvas, 0, 0);
+}
+
+function setKeyColor(row, cmd, color) {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return false;
+  cmd.keyColor = color.toLowerCase();
+  $(".f-key-color", row).value = cmd.keyColor;
+  $(".f-key-hex", row).value = cmd.keyColor;
+  renderKeyPreview(row, cmd);
+  scheduleSave(200);
+  return true;
+}
+
+function setPicking(row, on) {
+  $(".stage", row).classList.toggle("picking", on);
+  $(".f-pick", row).classList.toggle("active", on);
+}
+
+// pickKeyColor takes the colour under the pointer from the stage frame.
+function pickKeyColor(row, cmd, e) {
+  setPicking(row, false);
+  const v = $(".thumb", row);
+  if (!thumbReady(v)) { toast(L("The frame hasn't loaded yet", "Кадр ещё не загрузился")); return; }
+  const [vw, vh] = thumbSize(v);
+  const r = $(".vrect", row).getBoundingClientRect();
+  const x = clampNum(Math.floor((e.clientX - r.left) / r.width * vw), 0, vw - 1);
+  const y = clampNum(Math.floor((e.clientY - r.top) / r.height * vh), 0, vh - 1);
+  try {
+    const c = document.createElement("canvas");
+    c.width = c.height = 1;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(v, x, y, 1, 1, 0, 0, 1, 1);
+    const [R, G, B] = ctx.getImageData(0, 0, 1, 1).data;
+    setKeyColor(row, cmd, "#" + [R, G, B].map(n => n.toString(16).padStart(2, "0")).join(""));
+  } catch (err) {
+    toast(L("Couldn't take the color: ", "Не удалось взять цвет: ") + err);
+  }
+}
+
+function bindKeying(row, cmd) {
+  const box = $(".keying", row);
+  const on = $(".f-key", row);
+  on.checked = cmd.key;
+  box.classList.toggle("on", cmd.key);
+  on.addEventListener("change", () => {
+    cmd.key = on.checked;
+    box.classList.toggle("on", cmd.key);
+    if (!cmd.key) setPicking(row, false);
+    renderKeyPreview(row, cmd);
+    scheduleSave(0);
+  });
+
+  $(".f-key-color", row).value = cmd.keyColor;
+  $(".f-key-hex", row).value = cmd.keyColor;
+  $(".f-key-color", row).addEventListener("input", e => setKeyColor(row, cmd, e.target.value));
+  const hex = $(".f-key-hex", row);
+  hex.addEventListener("change", () => { if (!setKeyColor(row, cmd, hex.value.trim())) hex.value = cmd.keyColor; });
+  $(".f-key-green", row).addEventListener("click", () => setKeyColor(row, cmd, "#00ff00"));
+  $(".f-key-blue", row).addEventListener("click", () => setKeyColor(row, cmd, "#0000ff"));
+  $(".f-pick", row).addEventListener("click", () => setPicking(row, !$(".stage", row).classList.contains("picking")));
+
+  for (const field of ["similarity", "smoothness", "spill"]) {
+    bindRange(row, ".f-" + field, cmd, field, () => renderKeyPreview(row, cmd), "");
+  }
+}
+
+// ---------- channel points ----------
+// What a reward can play: its list, a label and the thing it plays (for
+// "Reward … will play …").
+const rewardKinds = () => [
+  ["rewardSounds", L("Sound", "Звук"), L("a sound", "звук")],
+  ["rewardVideos", L("Video", "Видео"), L("a video", "видео")],
+  ["rewardGifs", L("GIF + Sound", "GIF + звук"), L("a GIF with sound", "gif + звук")],
+];
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+const baseName = path => path.split(/[\\/]/).pop();
+
+// countOf writes "n things" in the UI language: en = [one, many],
+// ru = [one, few, many] (1 балл, 2 балла, 5 баллов).
+function countOf(n, en, ru) {
+  if (LANG !== "ru") return `${n} ${n === 1 ? en[0] : en[1]}`;
+  const m10 = n % 10, m100 = n % 100;
+  const form = m10 === 1 && m100 !== 11 ? 0 : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? 1 : 2;
+  return `${n} ${ru[form]}`;
+}
+
+// rewardEntry finds what a reward plays: the first entry with its title.
+function rewardEntry(title) {
+  const key = rewardKey(title);
+  for (const [kind, label, what] of rewardKinds()) {
+    const cmd = itemsOf(kind).find(c => rewardKey(c.trigger) === key);
+    if (cmd) return { kind, label, what, cmd };
+  }
+  return null;
+}
+
+function focusRow(id) {
+  const item = findItem(id), row = rowOf(id);
+  if (!item || !row) return;
+  reveal(item.kind);
+  requestAnimationFrame(() => {
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    $(".f-file", row).focus({ preventScroll: true });
+  });
+}
+
+// pickReward lists the channel's rewards under an "add" button; the chosen
+// one becomes a new entry of that kind. Without a loaded list it just adds
+// an empty entry to type the title into.
+function pickReward(button, kind) {
+  const list = S.rewards.list;
+  if (!list.length) {
+    addItem(kind);
+    return;
+  }
+  const m = $("#pickMenu");
+  m.replaceChildren(el("div", "pick-title", L("Which reward?", "Для какой награды?")));
+  for (const r of list) {
+    const entry = rewardEntry(r.title);
+    const b = el("button", "", r.title);
+    b.append(el("span", "pick-cost", String(r.cost)));
+    if (entry) {
+      b.disabled = true;
+      b.title = L(`Already set up: ${entry.what}`, `Уже настроена: ${entry.what}`);
+    }
+    b.addEventListener("click", () => { hidePick(); addItem(kind, r.title); });
+    m.append(b);
+  }
+  const other = el("button", "pick-other", L("Other title…", "Другое название…"));
+  other.addEventListener("click", () => { hidePick(); addItem(kind); });
+  m.append(other);
+  m.hidden = false;
+  const r = button.getBoundingClientRect();
+  m.style.left = clampNum(r.right - m.offsetWidth, 8, innerWidth - m.offsetWidth - 8) + "px";
+  m.style.top = (r.bottom + 4 + m.offsetHeight < innerHeight - 8 ? r.bottom + 4 : Math.max(8, r.top - m.offsetHeight - 4)) + "px";
+}
+
+function hidePick() { $("#pickMenu").hidden = true; }
+
+// renderRewardTable lists the channel's rewards (loaded from Twitch) with
+// what each one plays, or buttons to set that up.
+function renderRewardTable() {
+  const R = S.rewards, table = $("#rewardTable");
+  const loggedIn = !!S.points.login;
+  $("#refreshRewards").disabled = !loggedIn || R.state === "loading";
+  $("#rewardTitles").replaceChildren(...R.list.map(r => { const o = el("option"); o.value = r.title; return o; }));
+  table.replaceChildren();
+  $("#rewardsSummary").textContent = "";
+  const note = text => table.append(el("div", "empty", text));
+  if (!loggedIn) return note(L("Log in to Twitch — the channel's rewards will load by themselves.", "Войдите в Twitch — награды канала загрузятся сами."));
+  if (R.state === "loading") return note(L("Loading rewards…", "Загрузка наград…"));
+  if (R.state === "error") return note(L("Couldn't load the rewards: ", "Не удалось загрузить награды: ") + R.error);
+  if (R.state !== "loaded") return note(L("Click “Refresh” to load the rewards.", "Нажмите «Обновить», чтобы загрузить награды."));
+  if (!R.list.length) {
+    return note(L("The channel has no custom rewards yet — create them in the Twitch dashboard and click “Refresh”.",
+      "На канале пока нет своих наград — создайте их в панели управления Twitch и нажмите «Обновить»."));
+  }
+
+  let linked = 0;
+  for (const r of R.list) {
+    const entry = rewardEntry(r.title);
+    const item = el("div", "reward-item" + (entry ? " linked" : ""));
+    item.append(el("span", "r-title", r.title), el("span", "r-cost", countOf(r.cost, ["point", "points"], ["балл", "балла", "баллов"])));
+    if (!r.is_enabled) item.append(el("span", "r-badge", L("disabled", "выключена")));
+    if (r.is_paused) item.append(el("span", "r-badge", L("paused", "на паузе")));
+    if (r.is_user_input_required) item.append(el("span", "r-badge", L("with viewer text", "с текстом зрителя")));
+    item.append(el("span", "spacer"));
+    if (entry) {
+      linked++;
+      const file = entry.cmd[LISTS[entry.kind].field];
+      item.append(el("span", "r-link", `✓ ${entry.label}${file ? ": " + baseName(file) : L(" — choose a file", " — выберите файл")}`));
+      const go = el("button", "ghost", L("Go to", "Перейти"));
+      go.addEventListener("click", () => focusRow(entry.cmd.id));
+      item.append(go);
+    } else {
+      for (const [kind, label, what] of rewardKinds()) {
+        const b = el("button", "", "+ " + label);
+        b.title = L(`Reward “${r.title}” will play ${what}`, `Награда «${r.title}» запустит ${what}`);
+        b.addEventListener("click", () => addItem(kind, r.title));
+        item.append(b);
+      }
+    }
+    table.append(item);
+  }
+  $("#rewardsSummary").textContent = L(`${linked} of ${R.list.length} set up`, `${linked} из ${R.list.length} настроено`);
+}
+
+function loadRewards() {
+  S.rewards.state = "loading";
+  renderRewardTable();
+  goTwitchRewards();
+}
+
+function renderPoints() {
+  const p = S.points.state ? S.points : { state: "off", message: "", login: "" };
+  const hasClient = !!S.cfg.twitch.clientId;
+  const text = {
+    off: hasClient
+      ? L("Not connected — log in so that channel point rewards trigger commands.", "Не подключено — войдите, чтобы награды за баллы канала запускали команды.")
+      : L("Not connected — enter the Client ID first (below).", "Не подключено — сначала укажите Client ID (ниже)."),
+    login: L("Waiting for you to confirm the login on the Twitch site…", "Ждём подтверждения входа на сайте Twitch…"),
+    connecting: L("Connecting to the channel's rewards…", "Подключение к наградам канала…"),
+    connected: L(`Connected: ${p.login} — rewards for points trigger commands.`, `Подключено: ${p.login} — награды за баллы запускают команды.`),
+    reconnecting: p.message,
+    error: p.message,
+  }[p.state] || "";
+  const st = $("#pointsStatus");
+  setStatus(st, p.state === "connected", text);
+  st.classList.toggle("bad", p.state === "error" || p.state === "reconnecting");
+
+  const login = $("#twitchLogin");
+  login.hidden = !["off", "error"].includes(p.state);
+  login.textContent = p.login ? L("Log in again", "Войти заново") : L("Log in with Twitch", "Войти через Twitch");
+  login.disabled = !hasClient;
+  login.title = hasClient ? "" : L("Enter the Client ID first", "Сначала укажите Client ID");
+  $("#twitchLogout").hidden = !p.login;
+  $("#pointsCode").hidden = p.state !== "login";
+  $("#pointsCodeText").textContent = p.state === "login" ? p.message : "";
+}
+
+function bindPoints() {
+  const id = $("#clientId");
+  id.value = S.cfg.twitch.clientId;
+  $("#clientIdBox").open = !S.cfg.twitch.clientId;
+  id.addEventListener("input", () => {
+    S.cfg.twitch.clientId = id.value.trim();
+    renderPoints();
+    scheduleSave(600);
+  });
+  $("#twitchLogin").addEventListener("click", () => {
+    saveNow(); // the Client ID must be saved before Go reads it
+    setTimeout(() => goTwitchLogin().catch(toast), 50);
+  });
+  $("#twitchLogout").addEventListener("click", () => goTwitchLogout());
+  $("#refreshRewards").addEventListener("click", loadRewards);
+  $("#pointsCancel").addEventListener("click", () => goTwitchCancelLogin());
+  $("#pointsOpen").addEventListener("click", () => goOpenURL(S.pointsUri || "https://www.twitch.tv/activate"));
+  for (const a of $$("a[data-url]")) {
+    a.addEventListener("click", e => { e.preventDefault(); goOpenURL(a.dataset.url); });
+  }
+}
+
+// The settings folder can be changed; the environment variable fixes it.
+function bindSettingsDir(locked) {
+  const pick = $("#pickSettingsDir");
+  pick.disabled = locked;
+  if (locked) pick.title = L("The folder is set by the TWITCH_EASY_MEDIA_ALERTS_DIR environment variable", "Папку задаёт переменная окружения TWITCH_EASY_MEDIA_ALERTS_DIR");
+  pick.addEventListener("click", () => goPickSettingsDir());
+  $("#openSettingsDir").addEventListener("click", () => goOpenSettingsDir());
+}
+
+// A new language is saved first, then the page reloads in it (Go sends the
+// whole state again).
+function bindLanguage() {
+  const sel = $("#language");
+  sel.value = LANG;
+  sel.addEventListener("change", async () => {
+    S.cfg.language = sel.value;
+    clearTimeout(saveTimer);
+    saveTimer = 0;
+    try {
+      await goSaveConfig(S.cfg);
+      goReloadPage(); // the page comes from a string: location.reload() would blank it
+    } catch (e) {
+      sel.value = S.cfg.language = LANG;
+      toast(e);
+    }
+  });
+}
+
+// ---------- showing videos in OBS ----------
+function setStatus(el, ok, text) {
+  el.classList.toggle("open", ok);
+  el.lastElementChild.textContent = text;
+}
+
+function renderObs() {
+  const url = $("#obsUrl");
+  url.value = S.obsUrl;
+  requestAnimationFrame(() => scrollToEnd(url));
+  setStatus($("#obsStatus"), S.obsPages > 0, S.obsPages > 0
+    ? L("OBS is connected — videos and GIFs are shown in this source.", "OBS подключён — видео и GIF показываются в этом источнике.")
+    : L("OBS isn't connected yet — add the source following the steps below.", "OBS пока не подключён — добавьте источник по инструкции ниже."));
+  renderObsLines();
+}
+
+function renderVideoWindow() {
+  const v = S.cfg.video;
+  const open = S.videoWindowOpen;
+  $("#videoWindowBtn").textContent = open ? L("Hide window", "Скрыть окно") : L("Open window", "Открыть окно");
+  setStatus($("#videoWindowStatus"), open && !S.obsPages, !open
+    ? L("The window is closed.", "Окно закрыто.")
+    : S.obsPages
+      ? L("The window is open, but things are shown in the Browser source right now.", "Окно открыто, но показ сейчас идёт в источник «Браузер».")
+      : L(`The window is open — ${v.width}×${v.height}. Videos and GIFs are shown in it.`, `Окно открыто — ${v.width}×${v.height}. Видео и GIF показываются в нём.`));
+  renderObsLines();
+}
+
+// The video and GIF tabs show where things will appear, with a link to the
+// OBS tab.
+function renderObsLines() {
+  const text = S.obsPages
+    ? L("Showing in OBS: the Browser source is connected.", "Показ в OBS: подключён источник «Браузер».")
+    : S.videoWindowOpen
+      ? L("Showing in OBS: through the capture window.", "Показ в OBS: через окно для захвата.")
+      : L("Showing in OBS isn't set up — there's nowhere to show videos and GIFs now.", "Показ в OBS не настроен — видео и GIF сейчас некуда показать.");
+  for (const line of $$(".obs-line")) {
+    line.classList.toggle("ok", S.obsPages > 0 || S.videoWindowOpen);
+    $(".obs-line-text", line).textContent = text;
+  }
+  $("#tabObsDot").classList.toggle("on", S.obsPages > 0 || S.videoWindowOpen);
+}
+
+function renderVideoSettings() {
+  const v = S.cfg.video;
+  const sel = $("#resPreset");
+  const preset = RES_PRESETS.findIndex(([w, h]) => w === v.width && h === v.height);
+  sel.value = preset >= 0 ? String(preset) : "custom";
+  $("#resCustom").hidden = preset >= 0;
+  $("#resW").value = v.width;
+  $("#resH").value = v.height;
+  $("#bgColor").value = v.background;
+  $("#bgHex").value = v.background;
+  for (const el of $$(".res-w")) el.textContent = v.width;
+  for (const el of $$(".res-h")) el.textContent = v.height;
+  document.documentElement.style.setProperty("--chroma", v.background);
+  renderVideoWindow();
+  renderAllStages();
+}
+
+function setResolution(w, h) {
+  S.cfg.video.width = clampNum(Math.round(w) || 1920, 320, 7680);
+  S.cfg.video.height = clampNum(Math.round(h) || 1080, 180, 4320);
+  renderVideoSettings();
+  scheduleSave(0);
+}
+
+function setBackground(color) {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return false;
+  S.cfg.video.background = color.toLowerCase();
+  renderVideoSettings();
+  scheduleSave(200);
+  return true;
+}
+
+function bindVideoSettings() {
+  const sel = $("#resPreset");
+  RES_PRESETS.forEach(([, , label], i) => {
+    const o = document.createElement("option");
+    o.value = String(i);
+    o.textContent = label();
+    sel.append(o);
+  });
+  const custom = document.createElement("option");
+  custom.value = "custom";
+  custom.textContent = L("Custom resolution…", "Своё разрешение…");
+  sel.append(custom);
+  sel.addEventListener("change", () => {
+    if (sel.value === "custom") { $("#resCustom").hidden = false; $("#resW").focus(); return; }
+    const [w, h] = RES_PRESETS[+sel.value];
+    setResolution(w, h);
+  });
+  for (const id of ["#resW", "#resH"]) {
+    $(id).addEventListener("change", () => setResolution(+$("#resW").value, +$("#resH").value));
+  }
+
+  $("#bgColor").addEventListener("input", e => setBackground(e.target.value));
+  const hex = $("#bgHex");
+  hex.addEventListener("change", () => { if (!setBackground(hex.value.trim())) hex.value = S.cfg.video.background; });
+  $("#bgGreen").addEventListener("click", () => setBackground("#00ff00"));
+  $("#bgBlue").addEventListener("click", () => setBackground("#0000ff"));
+
+  $("#videoWindowBtn").addEventListener("click", () => goSetVideoWindow(!S.videoWindowOpen));
+
+  const copy = $("#copyObsUrl");
+  let copyTimer = 0;
+  copy.addEventListener("click", () => {
+    goCopyText(S.obsUrl).then(() => {
+      copy.textContent = L("Copied ✓", "Скопировано ✓");
+      clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => { copy.textContent = L("Copy", "Копировать"); }, 1500);
+    }).catch(toast);
+  });
+  $("#obsUrl").addEventListener("focus", e => e.target.select());
+}
+
+// ---------- master switch & playing state ----------
+// Master switch: silences chat commands without touching their own toggles.
+function renderCommandsEnabled() {
+  const on = S.cfg.commandsEnabled !== false;
+  for (const m of $$(".cmd-master")) {
+    $(".f-master", m).checked = on;
+    $(".master-text", m).textContent = on
+      ? L("All commands on", "Все команды включены")
+      : L("All commands off — sounds and videos from chat don't play", "Все команды отключены — звуки и видео из чата не играют");
+    m.classList.toggle("off", !on);
+  }
+  for (const l of $$(".list")) l.classList.toggle("paused", !on);
+}
+
+// Only one sound or video plays at a time; its row is highlighted and its ▶
+// turns into ■.
+function renderPlaying() {
+  for (const row of $$(".cmd")) {
+    const on = row.dataset.id === S.playing;
+    row.classList.toggle("playing", on);
+    const btn = $(".f-test", row);
+    if (btn.classList.contains("stop") === on) continue;
+    btn.classList.toggle("stop", on);
+    btn.innerHTML = on ? STOP_ICON : PLAY_ICON;
+    btn.title = on ? L("Stop", "Остановить") : LISTS[kindOfRow(row)].testTitle();
+    btn.setAttribute("aria-label", btn.title);
+  }
+  $("#stopAll").classList.toggle("primary", !!S.playing);
+}
+
+// ---------- log ----------
+function addLog(e) {
+  const log = $("#log");
+  $(".log-empty", log)?.remove();
+  const div = document.createElement("div");
+  div.className = "entry";
+  div.dataset.kind = e.kind;
+  const t = document.createElement("time"); t.textContent = e.time;
+  const s = document.createElement("span"); s.textContent = e.text;
+  div.append(t, s);
+  log.prepend(div);
+  while (log.childElementCount > 300) log.lastElementChild.remove();
+}
+
+function renderLogEmpty() {
+  const log = $("#log");
+  log.replaceChildren();
+  const e = document.createElement("div");
+  e.className = "log-empty";
+  e.textContent = L("Commands that fire will show up here.", "Здесь появятся сработавшие команды.");
+  log.append(e);
+}
+
+// ---------- events from Go ----------
+window.onAppEvent = ev => {
+  switch (ev.type) {
+    case "status": S.status = ev.status; renderStatus(); break;
+    case "log": addLog(ev.entry); break;
+    case "playing": S.playing = ev.id || ""; renderPlaying(); break;
+    case "commandsEnabled": S.cfg.commandsEnabled = ev.value; renderCommandsEnabled(); break;
+    case "videoWindow": S.videoWindowOpen = ev.open; renderVideoWindow(); break;
+    case "pages": S.obsPages = ev.obs; renderObs(); renderVideoWindow(); break;
+    case "points": {
+      const was = S.points.state;
+      S.points = ev.status;
+      if (!S.points.login) S.rewards = { list: [], state: "idle", error: "" };
+      else if (S.points.state === "connected" && was !== "connected") S.rewards.state = "loading"; // Go loads them
+      renderPoints();
+      renderRewardTable();
+      break;
+    }
+    case "rewards":
+      S.rewards = ev.error
+        ? { list: S.rewards.list, state: "error", error: ev.error }
+        : { list: ev.rewards || [], state: "loaded", error: "" };
+      renderRewardTable();
+      break;
+    case "pointsLogin": S.pointsUri = ev.uri; break;
+    case "configPath": $("#configPath").textContent = ev.path; break;
+    case "fileChosen": {
+      const item = findItem(ev.id);
+      const row = rowOf(ev.id);
+      if (!item || !row) break;
+      item.cmd[ev.field] = ev.path;
+      const f = $(ev.field === "sound" ? ".f-sound" : ".f-file", row);
+      f.value = f.title = ev.path;
+      scrollToEnd(f);
+      saveNow();
+      break;
+    }
+  }
+};
+
+// ---------- wiring ----------
+function bindGeneral() {
+  const ch = $("#channel");
+  ch.value = S.cfg.channel;
+  ch.addEventListener("input", () => { S.cfg.channel = ch.value; $("#channelError").textContent = ""; scheduleSave(800); });
+  ch.addEventListener("keydown", e => { if (e.key === "Enter" && S.status.state === "disconnected") connectToggle(); });
+  $("#connectBtn").addEventListener("click", connectToggle);
+
+  for (const id of ["autoConnect", "minimizeToTray", "closeToTray", "startMinimized"]) {
+    const el = $("#" + id);
+    el.checked = !!S.cfg[id];
+    el.addEventListener("change", () => { S.cfg[id] = el.checked; scheduleSave(0); });
+  }
+
+  const dev = $("#device");
+  dev.addEventListener("change", () => { S.cfg.device = dev.value; scheduleSave(0); });
+
+  const mv = $("#masterVolume"), mvVal = $("#masterVolumeVal");
+  mv.value = S.cfg.masterVolume;
+  mvVal.textContent = S.cfg.masterVolume + "%";
+  setRangeFill(mv);
+  mv.addEventListener("input", () => {
+    S.cfg.masterVolume = +mv.value;
+    mvVal.textContent = mv.value + "%";
+    setRangeFill(mv);
+    scheduleSave();
+  });
+
+  const gc = $("#globalCooldown");
+  gc.value = S.cfg.globalCooldown;
+  gc.addEventListener("input", () => { S.cfg.globalCooldown = clampNum(Math.floor(+gc.value || 0), 0, 3600); scheduleSave(); });
+  gc.addEventListener("blur", () => { gc.value = S.cfg.globalCooldown; });
+
+  $("#refreshDevices").addEventListener("click", async () => {
+    try {
+      S.devices = (await goRefreshDevices()) || [];
+      $("#deviceError").textContent = "";
+      renderDevices();
+    } catch (e) { $("#deviceError").textContent = String(e); }
+  });
+  $("#stopAll").addEventListener("click", () => goStop());
+  $("#addCmd").addEventListener("click", () => addItem("commands"));
+  $("#addVideo").addEventListener("click", () => addItem("videos"));
+  $("#addGif").addEventListener("click", () => addItem("gifs"));
+  // Reward entries are added by picking one of the channel's rewards.
+  for (const [id, kind] of [["#addRewardSound", "rewardSounds"], ["#addRewardVideo", "rewardVideos"], ["#addRewardGif", "rewardGifs"]]) {
+    $(id).addEventListener("click", e => pickReward(e.currentTarget, kind));
+  }
+  for (const b of $$(".go-obs")) b.addEventListener("click", () => selectTab("obs"));
+  for (const input of $$(".f-master")) {
+    input.addEventListener("change", () => {
+      S.cfg.commandsEnabled = input.checked;
+      renderCommandsEnabled();
+      goSetCommandsEnabled(input.checked).catch(toast);
+    });
+  }
+  for (const b of $$("[data-tab]")) b.addEventListener("click", () => selectTab(b.dataset.tab));
+  for (const b of $$("[data-subtab]")) b.addEventListener("click", () => selectSubTab(b.closest("nav").dataset.group, b.dataset.subtab));
+  $("#clearLog").addEventListener("click", () => { goClearLog(); renderLogEmpty(); });
+}
+
+async function connectToggle() {
+  if (S.status.state !== "disconnected") { goDisconnect(); return; }
+  const value = $("#channel").value.trim();
+  if (!value) { $("#channelError").textContent = L("Paste the channel's link or its name.", "Вставьте ссылку на канал или его имя."); return; }
+  try {
+    await goConnect(value);
+    $("#channelError").textContent = "";
+  } catch (e) { $("#channelError").textContent = String(e); }
+}
+
+// Keep the browser's reload/print/find shortcuts from interfering with the app.
+document.addEventListener("keydown", e => {
+  const k = e.key.toLowerCase();
+  if (e.key === "F5" || e.key === "F3" || e.key === "F7" || (e.ctrlKey && ["r", "p", "f", "g", "u", "j", "s"].includes(k))) e.preventDefault();
+});
+
+// WebView2's own context menu is off, so text fields get a small one of ours.
+let ctxTarget = null;
+function hideCtx() { $("#ctx").hidden = true; ctxTarget = null; }
+document.addEventListener("contextmenu", e => {
+  e.preventDefault();
+  const input = e.target.closest("input[type=text], input[type=number]");
+  if (!input) { hideCtx(); return; }
+  ctxTarget = input;
+  input.focus();
+  const m = $("#ctx");
+  let hasSel = false;
+  try { hasSel = input.selectionStart !== input.selectionEnd; } catch { hasSel = true; }
+  $('[data-act="cut"]', m).disabled = !hasSel;
+  $('[data-act="copy"]', m).disabled = !hasSel;
+  m.hidden = false;
+  const x = Math.min(e.clientX, innerWidth - m.offsetWidth - 6);
+  const y = Math.min(e.clientY, innerHeight - m.offsetHeight - 6);
+  m.style.left = x + "px";
+  m.style.top = y + "px";
+});
+document.addEventListener("mousedown", e => {
+  if (!e.target.closest("#ctx")) hideCtx();
+  if (!e.target.closest("#pickMenu")) hidePick();
+});
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape") return;
+  hideCtx();
+  hidePick();
+  for (const row of $$(".vcmd")) setPicking(row, false);
+});
+window.addEventListener("blur", () => { hideCtx(); hidePick(); });
+window.addEventListener("scroll", e => { hideCtx(); if (!e.target.closest?.("#pickMenu")) hidePick(); }, true);
+$("#ctx").addEventListener("click", async e => {
+  const act = e.target.closest("button")?.dataset.act;
+  const el = ctxTarget;
+  if (!act || !el) return;
+  hideCtx();
+  el.focus();
+  if (act === "paste") {
+    const text = await goClipboardText().catch(() => "");
+    if (text) document.execCommand("insertText", false, text.replace(/\s+/g, " ").trim());
+  } else if (act === "selectAll") {
+    el.select();
+  } else {
+    document.execCommand(act);
+  }
+});
+
+(async function init() {
+  const st = await goGetInitial();
+  S.cfg = st.config;
+  LANG = S.cfg.language === "ru" ? "ru" : "en";
+  applyLang();
+  document.documentElement.lang = LANG;
+  S.cfg.commands = S.cfg.commands || [];
+  S.cfg.videos = S.cfg.videos || [];
+  S.cfg.gifs = S.cfg.gifs || [];
+  S.cfg.twitch = S.cfg.twitch || { clientId: "" };
+  S.cfg.rewards = S.cfg.rewards || {};
+  for (const k of ["sounds", "videos", "gifs"]) S.cfg.rewards[k] = S.cfg.rewards[k] || [];
+  S.points = st.points || {};
+  S.devices = st.devices || [];
+  S.status = st.status;
+  S.missing = new Set(st.missing || []);
+  S.playing = st.playing || "";
+  S.mediaBase = st.mediaBase;
+  S.videoWindowOpen = st.videoWindowOpen;
+  S.obsUrl = st.obsUrl;
+  S.obsPages = st.obsPages || 0;
+  $("#configPath").textContent = st.configPath;
+  bindSettingsDir(st.settingsLocked);
+  bindLanguage();
+  $("#deviceError").textContent = st.deviceError || "";
+  bindGeneral();
+  bindVideoSettings();
+  bindPoints();
+  renderPoints();
+  if (S.points.state === "connected") loadRewards();
+  renderDevices();
+  renderStatus();
+  renderList("commands");
+  renderList("videos");
+  renderList("gifs");
+  renderList("rewardSounds");
+  renderList("rewardVideos");
+  renderList("rewardGifs");
+  refreshNotes();
+  refreshThumbs();
+  renderVideoSettings();
+  renderObs();
+  renderPlaying();
+  renderCommandsEnabled();
+  selectTab(["rewards", "obs"].includes(S.cfg.tab) ? S.cfg.tab : "chat");
+  selectSubTab("chat", ["videos", "gifs"].includes(S.cfg.chatTab) ? S.cfg.chatTab : "sounds");
+  selectSubTab("rewards", ["videos", "gifs"].includes(S.cfg.rewardsTab) ? S.cfg.rewardsTab : "sounds");
+  renderLogEmpty();
+  for (const e of st.logs || []) addLog(e);
+})().catch(e => {
+  if (!document.documentElement.lang) document.documentElement.lang = LANG;
+  toast(L("The interface failed to start: ", "Ошибка запуска интерфейса: ") + e);
+});
+</script>
+</body>
+</html>

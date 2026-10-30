@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Twitch Easy Media Alerts — OBS</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  #stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: hidden; }
+  video, canvas, img { position: absolute; display: block; }
+  video { object-fit: fill; visibility: hidden; }
+  video.shown { visibility: visible; }
+  video.keyed { visibility: visible; opacity: 0; } /* still decoding, drawn by the canvas */
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<script>/*chroma.js*/</script>
+<script>
+"use strict";
+// The same page runs in the app's window (…/window, solid background for a
+// chroma key) and in an OBS browser source (…/obs, transparent background).
+// It shows videos and GIFs with sound. The stage is laid out in output
+// pixels (e.g. 1920×1080) and scaled to the viewport, so positions don't
+// depend on display scaling or the source's size.
+const stage = document.getElementById("stage");
+const base = location.pathname.slice(0, location.pathname.lastIndexOf("/") + 1);
+const kind = location.pathname.endsWith("/obs") ? "obs" : "window";
+let cfg = { width: 1920, height: 1080, background: "#00ff00" };
+let cur = null; // { play, parts: [elements], canvas, timers: [], decoder }
+let audio = null;
+let keyer;      // chroma key renderer, created on first use (null without WebGL)
+
+function layout() {
+  const bg = kind === "obs" ? "transparent" : cfg.background;
+  document.documentElement.style.background = bg;
+  document.body.style.background = bg;
+  stage.style.background = bg;
+  stage.style.width = cfg.width + "px";
+  stage.style.height = cfg.height + "px";
+  stage.style.transform = `scale(${Math.min(innerWidth / cfg.width, innerHeight / cfg.height)})`;
+}
+addEventListener("resize", layout);
+layout();
+
+function report(msg) {
+  fetch(base + "report", { method: "POST", body: JSON.stringify(msg), keepalive: true }).catch(() => {});
+}
+
+function stop() {
+  if (!cur) return;
+  const c = cur;
+  cur = null;
+  for (const t of c.timers) clearTimeout(t);
+  if (c.decoder) c.decoder.close();
+  if (c.canvas) c.canvas.remove();
+  for (const el of c.parts) {
+    if (el instanceof HTMLMediaElement) {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    }
+    el.remove();
+  }
+}
+
+// begin makes a new current playback; fail and finish end it once.
+function begin(ev) {
+  stop();
+  const c = cur = { play: ev.play, parts: [], timers: [] };
+  c.fail = message => {
+    if (cur !== c) return;
+    stop();
+    report({ type: "error", play: c.play, message });
+  };
+  c.finish = () => {
+    if (cur !== c) return;
+    stop();
+    report({ type: "ended", play: c.play });
+  };
+  return c;
+}
+
+// place fits a w×h picture into the stage, applies the command's scale and
+// puts it at x/y within the space left over (0 = left/top, 1 = right/bottom).
+function place(w, h, ev) {
+  const W = cfg.width, H = cfg.height;
+  const k = Math.min(W / w, H / h) * ev.scale / 100;
+  w *= k;
+  h *= k;
+  const x = ev.random ? Math.random() : ev.x;
+  const y = ev.random ? Math.random() : ev.y;
+  return { width: w + "px", height: h + "px", left: (W - w) * x + "px", top: (H - h) * y + "px" };
+}
+
+function showCanvas(c, box) {
+  c.canvas = keyer.canvas;
+  Object.assign(c.canvas.style, box);
+  stage.append(c.canvas);
+}
+
+function getKeyer() {
+  if (keyer === undefined) keyer = createKeyer(false);
+  return keyer;
+}
+
+// Volume above 100% needs Web Audio; without it, cap at the element's 100%.
+function connectAudio(el, volume) {
+  try {
+    audio ??= new AudioContext();
+    if (audio.state === "suspended") audio.resume();
+    const gain = audio.createGain();
+    gain.gain.value = volume;
+    audio.createMediaElementSource(el).connect(gain).connect(audio.destination);
+  } catch {
+    el.volume = Math.min(1, Math.max(0, volume));
+  }
+}
+
+// Problems are reported as codes; the app words them in its language.
+const MEDIA_ERRORS = { 1: "aborted", 2: "read", 3: "decode", 4: "unsupported" };
+const mediaError = el => MEDIA_ERRORS[el.error && el.error.code] || "open";
+
+// ---------- video ----------
+function playVideo(ev) {
+  const c = begin(ev);
+  const el = document.createElement("video");
+  c.parts.push(el);
+  el.preload = "auto";
+  el.playsInline = true;
+  el.addEventListener("loadedmetadata", () => {
+    if (cur !== c) return;
+    if (!el.videoWidth || !el.videoHeight) { c.fail("novideo"); return; }
+    const box = place(el.videoWidth, el.videoHeight, ev);
+    Object.assign(el.style, box);
+    if (ev.key && getKeyer()) {
+      // Draw the video through the chroma key every frame.
+      showCanvas(c, box);
+      el.classList.add("keyed");
+      const frame = () => {
+        if (cur !== c) return;
+        if (el.readyState >= 2) keyer.draw(el, el.videoWidth, el.videoHeight, ev.key);
+        requestAnimationFrame(frame);
+      };
+      frame();
+    } else {
+      el.classList.add("shown");
+    }
+    el.play().then(() => {
+      if (cur === c) report({ type: "started", play: c.play, duration: isFinite(el.duration) ? el.duration : 0 });
+    }, e => c.fail(String((e && e.message) || e)));
+  });
+  el.addEventListener("ended", c.finish);
+  el.addEventListener("error", () => c.fail(mediaError(el)));
+  connectAudio(el, ev.volume);
+  el.src = ev.url;
+  stage.append(el);
+}
+
+// ---------- GIF with sound ----------
+// keyedImage plays an animated picture frame by frame through the chroma key,
+// decoding it with ImageDecoder. Returns false if that isn't available.
+async function keyedImage(c, ev, box) {
+  if (!("ImageDecoder" in window) || !getKeyer()) return false;
+  try {
+    const resp = await fetch(ev.image);
+    const decoder = new ImageDecoder({ data: resp.body, type: resp.headers.get("Content-Type") || "image/gif" });
+    c.decoder = decoder;
+    await decoder.completed;
+    const count = decoder.tracks.selectedTrack.frameCount;
+    let i = 0;
+    const next = async () => {
+      if (cur !== c) return;
+      const { image } = await decoder.decode({ frameIndex: i });
+      if (cur !== c) { image.close(); return; }
+      keyer.draw(image, image.displayWidth, image.displayHeight, ev.key);
+      // GIF delays of 10 ms or less mean 100 ms, as in browsers.
+      const ms = image.duration > 10000 ? image.duration / 1000 : 100;
+      image.close();
+      i = (i + 1) % count;
+      c.timers.push(setTimeout(next, ms));
+    };
+    await next();
+    if (cur === c) showCanvas(c, box);
+    return true;
+  } catch {
+    if (c.decoder) { c.decoder.close(); c.decoder = null; }
+    return false;
+  }
+}
+
+function playGif(ev) {
+  const c = begin(ev);
+  // The picture stays for ev.duration seconds, or while the sound plays if
+  // that's 0; playback ends when both are done.
+  const done = { picture: false, sound: !ev.sound };
+  const check = () => { if (done.picture && done.sound) c.finish(); };
+
+  const img = new Image();
+  c.parts.push(img);
+  img.onerror = () => c.fail("image");
+  img.onload = async () => {
+    if (cur !== c) return;
+    const box = place(img.naturalWidth, img.naturalHeight, ev);
+    if (!(ev.key && await keyedImage(c, ev, box))) {
+      if (cur !== c) return;
+      Object.assign(img.style, box);
+      stage.append(img);
+    }
+    if (cur !== c) return;
+
+    let soundLength = 0;
+    if (ev.sound) {
+      const snd = new Audio();
+      c.parts.push(snd);
+      snd.preload = "auto";
+      snd.addEventListener("ended", () => { done.sound = true; check(); });
+      snd.addEventListener("error", () => c.fail("sound:" + mediaError(snd)));
+      connectAudio(snd, ev.volume);
+      snd.src = ev.sound;
+      try {
+        await snd.play();
+      } catch (e) {
+        c.fail(String((e && e.message) || e));
+        return;
+      }
+      if (cur !== c) return;
+      soundLength = isFinite(snd.duration) ? snd.duration : 0;
+    }
+    if (ev.duration > 0) {
+      c.timers.push(setTimeout(() => { done.picture = true; check(); }, ev.duration * 1000));
+    } else {
+      done.picture = true;
+    }
+    report({ type: "started", play: c.play, duration: Math.max(ev.duration, soundLength) });
+    check();
+  };
+  img.src = ev.image;
+}
+
+const events = new EventSource(base + "events?kind=" + kind);
+events.onmessage = e => {
+  const ev = JSON.parse(e.data);
+  if (ev.type === "config") { cfg = ev; layout(); }
+  else if (ev.type === "play") (ev.kind === "gif" ? playGif : playVideo)(ev);
+  else if (ev.type === "stop") stop();
+};
+</script>
+</body>
+</html>

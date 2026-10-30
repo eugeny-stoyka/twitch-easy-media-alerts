@@ -1,0 +1,26 @@
+# Build output (build.bat writes dist\TwitchEasyMediaAlerts.exe)
+/dist/
+*.exe
+*.exe~
+
+# Go test binaries and profiles
+*.test
+*.out
+*.prof
+
+# Settings that may end up next to the exe or in a portable folder: they hold
+# the Twitch login (encrypted, but still personal) and local file paths
+settings.json
+settings.json.bak
+settings.json.broken
+settings-dir.txt
+
+# IDEs and editors
+/.idea/
+/.vscode/
+*.swp
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
