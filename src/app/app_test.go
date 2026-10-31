@@ -260,6 +260,126 @@ func TestMultiPlayRewards(t *testing.T) {
 	a.stopAll()
 }
 
+// queuedWho lists who is waiting in the queue, in order.
+func queuedWho(a *App) []string {
+	a.redeemMu.Lock()
+	defer a.redeemMu.Unlock()
+	var who []string
+	for _, p := range a.redeemQueue {
+		who = append(who, p.who)
+	}
+	return who
+}
+
+// logHas reports whether a log entry contains want.
+func logHas(a *App, want string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, e := range a.logs {
+		if strings.Contains(e.Text, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// While something plays, a single-play chat command that isn't on cooldown
+// waits for its turn, whatever its cooldown; repeating it while it is on
+// cooldown is skipped.
+func TestChatCommandsQueue(t *testing.T) {
+	a := newVideoTestApp(t)
+	a.videoWindowShown.Store(true)
+	a.cfg.Commands = []config.Command{
+		{ID: "s", Enabled: true, Trigger: "!sad", File: `C:\nope\missing.mp3`, Volume: 100},
+		{ID: "c", Enabled: true, Trigger: "!angry", File: `C:\nope\missing.mp3`, Volume: 100, Cooldown: 5},
+	}
+	if err := a.startVideo(a.cfg.Videos[0], false); err != nil { // holds the slot
+		t.Fatal(err)
+	}
+
+	a.onMessage("viewer", "!angry") // has a 5 s cooldown, but isn't on it
+	if q := queuedWho(a); len(q) != 1 || q[0] != "viewer: !angry" {
+		t.Fatalf("command not on cooldown: queue %q", q)
+	}
+	a.onMessage("viewer2", "!angry") // its cooldown started when it was queued
+	if q := queuedWho(a); len(q) != 1 || !logHas(a, "viewer2: !angry — command cooldown") {
+		t.Fatalf("command on cooldown: queue %q", q)
+	}
+
+	for i := range maxChatQueue - 1 { // no cooldown: it may wait several times
+		a.onMessage(fmt.Sprint("viewer", i), "!sad")
+	}
+	if q := queuedWho(a); len(q) != maxChatQueue || q[1] != "viewer0: !sad" || !logHas(a, "viewer0: !sad — queued (2)") {
+		t.Fatalf("queue = %q", q)
+	}
+	a.onMessage("late", "!sad") // the chat's share of the queue is full
+	if !logHas(a, "late: !sad — 10 chat commands are waiting already, skipped") || len(queuedWho(a)) != maxChatQueue {
+		t.Error("an 11th chat command was queued")
+	}
+	a.onRedemption("viewer", "Sad", "") // rewards have room of their own
+	if q := queuedWho(a); len(q) != maxChatQueue+1 || !strings.Contains(q[maxChatQueue], "(points)") {
+		t.Fatalf("reward behind a full chat queue: %q", q)
+	}
+
+	// Once the video ends they play one after another.
+	a.onVideoReport(overlay.Report{Type: "ended", Play: a.video.seq})
+	waitFor(t, func() bool { return len(queuedWho(a)) == 0 }, "the queue to play out")
+	for _, want := range []string{"viewer: !angry → missing.mp3", "viewer0: !sad → missing.mp3", "viewer8: !sad → missing.mp3", "viewer (points): Sad → missing.mp3"} {
+		if !logHas(a, want) {
+			t.Errorf("log lacks %q", want)
+		}
+	}
+}
+
+// A sound plays from chat; another sound command, with a cooldown of its own
+// but not on it, waits and plays once the first one ends.
+func TestSecondSoundWaitsForFirst(t *testing.T) {
+	if testing.Short() {
+		t.Skip("plays (silently) on the real audio device")
+	}
+	const sound = `C:\Windows\Media\Alarm01.wav` // a few seconds long
+	if _, err := os.Stat(sound); err != nil {
+		t.Skip("test sound not found")
+	}
+	a := newVideoTestApp(t)
+	a.cfg.Commands = []config.Command{
+		{ID: "a", Enabled: true, Trigger: "!sadmeow", File: sound, Volume: 0, Cooldown: 5},
+		{ID: "b", Enabled: true, Trigger: "!wow", File: sound, Volume: 0, Cooldown: 5},
+	}
+	a.onMessage("viewer", "!sadmeow")
+	if a.player.Current() != "a" {
+		t.Fatalf("first sound isn't playing: %q", a.player.Current())
+	}
+	a.onMessage("viewer", "!wow")
+	if q := queuedWho(a); len(q) != 1 || q[0] != "viewer: !wow" {
+		t.Fatalf("second sound didn't wait: queue %q", q)
+	}
+	a.player.StopAndWait() // the first one ends
+	waitFor(t, func() bool { return a.player.Current() == "b" }, "the second sound to start")
+	if len(queuedWho(a)) != 0 {
+		t.Error("the second sound is still queued")
+	}
+	a.stopAll()
+}
+
+// Turning all commands off drops the chat commands waiting, not the rewards.
+func TestCommandsOffDropsQueuedChat(t *testing.T) {
+	a := newVideoTestApp(t)
+	a.videoWindowShown.Store(true)
+	if err := a.startVideo(a.cfg.Videos[0], false); err != nil {
+		t.Fatal(err)
+	}
+	a.onMessage("viewer", "!sad")
+	a.onRedemption("viewer", "Sad", "")
+	if q := queuedWho(a); len(q) != 2 {
+		t.Fatalf("queue = %q", q)
+	}
+	a.setCommandsEnabled(false)
+	if q := queuedWho(a); len(q) != 1 || !strings.Contains(q[0], "(points)") || !logHas(a, "Chat commands dropped from the queue (1)") {
+		t.Errorf("after turning commands off: %q", q)
+	}
+}
+
 // waitFor polls cond for up to 2 seconds.
 func waitFor(t *testing.T, cond func() bool, what string) {
 	t.Helper()

@@ -61,8 +61,8 @@ type App struct {
 	loginCancel context.CancelFunc
 	pointsSt    pointsStatus // guarded by mu
 
-	// Rewards waiting for the current sound or video to end. Take redeemMu
-	// before mediaMu.
+	// Rewards and single-play chat commands waiting for the current sound or
+	// video to end. Take redeemMu before mediaMu.
 	redeemMu    sync.Mutex
 	redeemQueue []pendingPlay
 
@@ -378,6 +378,7 @@ func (a *App) setCommandsEnabled(on bool) {
 		a.log("info", i18n.L("All commands on", "Все команды включены"))
 	} else {
 		a.log("warn", i18n.L("All commands off — sounds and videos from chat don't play", "Все команды отключены — звуки и видео из чата не играют"))
+		a.dropQueuedChat()
 	}
 	a.emit(map[string]any{"type": "commandsEnabled", "value": on})
 	a.updateTrayTip()
@@ -395,12 +396,13 @@ func (a *App) onMessage(user, text string) {
 	var (
 		id, trigger, file string
 		cooldown          int
+		multi             bool
 		start             func() error
 		kind              = "play"
 	)
 	if i := twitch.MatchCommand(a.cfg.Commands, text); i >= 0 {
 		cmd := a.cfg.Commands[i]
-		id, trigger, file, cooldown = cmd.ID, cmd.Trigger, cmd.File, cmd.Cooldown
+		id, trigger, file, cooldown, multi = cmd.ID, cmd.Trigger, cmd.File, cmd.Cooldown, cmd.MultiPlay
 		start = func() error { return a.startSound(cmd, false) }
 		if cmd.MultiPlay {
 			start = func() error { return a.startSoundMulti(cmd) }
@@ -412,7 +414,7 @@ func (a *App) onMessage(user, text string) {
 		kind = "video"
 	} else if i := twitch.MatchCommand(a.cfg.Gifs, text); i >= 0 {
 		g := a.cfg.Gifs[i]
-		id, trigger, file, cooldown = g.ID, g.Trigger, g.Image, g.Cooldown
+		id, trigger, file, cooldown, multi = g.ID, g.Trigger, g.Image, g.Cooldown, g.MultiPlay
 		start = func() error { return a.startGif(g, false) }
 		if g.MultiPlay {
 			start = func() error { return a.startGifMulti(g) }
@@ -441,28 +443,55 @@ func (a *App) onMessage(user, text string) {
 	}
 	a.mu.Unlock()
 
-	// One sound or video at a time: while one plays, chat commands are
-	// skipped and don't use up their cooldown.
-	if err := start(); err != nil {
-		switch {
-		case errors.Is(err, audio.ErrTooMany), errors.Is(err, errTooManyGifs):
-			a.log("skip", who+" — "+err.Error())
-		case errors.Is(err, errBusyVideo):
-			a.log("skip", who+i18n.L(" — a video is already playing", " — уже играет видео"))
-		case errors.Is(err, errBusyGif):
-			a.log("skip", who+i18n.L(" — a GIF is already showing", " — уже показывается GIF"))
-		case errors.Is(err, audio.ErrBusy):
-			a.log("skip", who+i18n.L(" — a sound is already playing", " — уже играет звук"))
-		default:
-			a.log("warn", who+" — "+err.Error())
-		}
+	// One sound or video at a time: while one plays, a single-play command
+	// that isn't on cooldown (checked above) waits for its turn. Its cooldown
+	// starts now, so repeating it meanwhile is skipped as usual.
+	p := pendingPlay{who: who, file: file, kind: kind, multi: multi, chat: true, start: start}
+	if !a.playChat(p, !multi) {
 		return
 	}
 	a.mu.Lock()
 	a.lastPlay[id] = now
 	a.lastAny = now
 	a.mu.Unlock()
-	a.log(kind, who+" → "+filepath.Base(file))
+}
+
+// playChat starts a chat command. While something plays, it waits in the
+// queue if canWait is set and is skipped otherwise. It reports whether the
+// command was taken (started or queued), so that its cooldown counts.
+func (a *App) playChat(p pendingPlay, canWait bool) bool {
+	a.redeemMu.Lock()
+	defer a.redeemMu.Unlock()
+	// A command that may wait keeps its turn behind the single-play ones
+	// waiting already.
+	if !canWait || !slices.ContainsFunc(a.redeemQueue, func(q pendingPlay) bool { return !q.multi }) {
+		err := p.start()
+		if err == nil {
+			a.log(p.kind, p.who+" → "+filepath.Base(p.file))
+			return true
+		}
+		if !canWait || !errors.Is(err, audio.ErrBusy) {
+			a.logChatSkip(p.who, err)
+			return false
+		}
+	}
+	return a.enqueueLocked(p)
+}
+
+// logChatSkip logs why a chat command didn't play.
+func (a *App) logChatSkip(who string, err error) {
+	switch {
+	case errors.Is(err, audio.ErrTooMany), errors.Is(err, errTooManyGifs):
+		a.log("skip", who+" — "+err.Error())
+	case errors.Is(err, errBusyVideo):
+		a.log("skip", who+i18n.L(" — a video is already playing", " — уже играет видео"))
+	case errors.Is(err, errBusyGif):
+		a.log("skip", who+i18n.L(" — a GIF is already showing", " — уже показывается GIF"))
+	case errors.Is(err, audio.ErrBusy):
+		a.log("skip", who+i18n.L(" — a sound is already playing", " — уже играет звук"))
+	default:
+		a.log("warn", who+" — "+err.Error())
+	}
 }
 
 // output resolves the device and final gain for a command. Caller holds mu.

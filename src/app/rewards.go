@@ -19,9 +19,15 @@ import (
 // reward with that title; chat messages can't run those. Viewers paid for
 // rewards, so instead of being skipped while something plays they wait in a
 // queue. Multi-play ones start at once, past the queue, and wait only while
-// too many multi-play sounds or GIFs are on.
+// too many multi-play sounds or GIFs are on. Single-play chat commands wait
+// in the same queue (see playChat).
 
-const maxRedeemQueue = 50
+const (
+	maxRedeemQueue = 50 // rewards waiting
+	// maxChatQueue caps the chat commands waiting, so a busy chat can't
+	// build a long backlog or crowd out rewards viewers paid for.
+	maxChatQueue = 10
+)
 
 type pointsStatus struct {
 	State   string `json:"state"`   // off, login, connecting, connected, reconnecting, error
@@ -29,10 +35,11 @@ type pointsStatus struct {
 	Login   string `json:"login"`
 }
 
-// pendingPlay is a command a reward is waiting to run.
+// pendingPlay is a command a reward or a chat message is waiting to run.
 type pendingPlay struct {
 	who, file, kind string
 	multi           bool // multi-play: doesn't wait for the one-at-a-time slot
+	chat            bool // from a chat message, not a reward
 	start           func() error
 }
 
@@ -258,12 +265,35 @@ func (a *App) onRedemption(user, reward, input string) {
 			return
 		}
 	}
-	if len(a.redeemQueue) >= maxRedeemQueue {
+	a.enqueueLocked(p)
+}
+
+// enqueueLocked puts p at the end of the queue, unless as many rewards (or
+// chat commands) as allowed wait already. It reports whether p was queued.
+// Caller holds redeemMu.
+func (a *App) enqueueLocked(p pendingPlay) bool {
+	limit := maxRedeemQueue
+	if p.chat {
+		limit = maxChatQueue
+	}
+	n := 0
+	for _, q := range a.redeemQueue {
+		if q.chat == p.chat {
+			n++
+		}
+	}
+	switch {
+	case n < limit:
+	case p.chat:
+		a.log("skip", fmt.Sprintf(i18n.L("%s — %d chat commands are waiting already, skipped", "%s — в очереди уже %d команд из чата, пропущено"), p.who, n))
+		return false
+	default:
 		a.log("warn", p.who+i18n.L(" — the reward queue is full, skipped", " — очередь наград переполнена, пропущено"))
-		return
+		return false
 	}
 	a.redeemQueue = append(a.redeemQueue, p)
 	a.log("info", fmt.Sprintf(i18n.L("%s — queued (%d)", "%s — в очереди (%d)"), p.who, len(a.redeemQueue)))
+	return true
 }
 
 func (a *App) logRedeemed(p pendingPlay, err error) {
@@ -304,7 +334,20 @@ func (a *App) clearRedemptions() {
 	a.redeemQueue = nil
 	a.redeemMu.Unlock()
 	if n > 0 {
-		a.log("info", fmt.Sprintf(i18n.L("Reward queue cleared (%d)", "Очередь наград очищена (%d)"), n))
+		a.log("info", fmt.Sprintf(i18n.L("Queue cleared (%d)", "Очередь очищена (%d)"), n))
+	}
+}
+
+// dropQueuedChat drops the chat commands waiting in the queue, when all
+// commands are turned off; rewards, which viewers paid for, stay.
+func (a *App) dropQueuedChat() {
+	a.redeemMu.Lock()
+	before := len(a.redeemQueue)
+	a.redeemQueue = slices.DeleteFunc(a.redeemQueue, func(q pendingPlay) bool { return q.chat })
+	n := before - len(a.redeemQueue)
+	a.redeemMu.Unlock()
+	if n > 0 {
+		a.log("info", fmt.Sprintf(i18n.L("Chat commands dropped from the queue (%d)", "Команды из чата убраны из очереди (%d)"), n))
 	}
 }
 
