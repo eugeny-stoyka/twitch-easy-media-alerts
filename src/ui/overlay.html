@@ -67,6 +67,7 @@ function end(c) {
     }
     el.remove();
   }
+  for (const url of c.urls) URL.revokeObjectURL(url);
   return true;
 }
 
@@ -77,7 +78,7 @@ function stopAll() { stop(); for (const c of [...extras]) end(c); }
 // begin makes a new playback: in the slot (replacing what is there), or
 // next to the others for a multi-play GIF. fail and finish end it once.
 function begin(ev) {
-  const c = { play: ev.play, multi: !!ev.multi, parts: [], timers: [] };
+  const c = { play: ev.play, multi: !!ev.multi, parts: [], timers: [], urls: [] };
   if (c.multi) extras.add(c);
   else { stop(); cur = c; }
   c.fail = message => {
@@ -172,13 +173,47 @@ function playVideo(ev) {
 }
 
 // ---------- GIF with sound ----------
+// Pictures are fetched once and shown through a new object URL each time:
+// under the same URL, older browsers (OBS has Chromium 127) go on with an
+// animated picture from the frame where it was last stopped, as they share
+// one animation per URL. The most recent pictures stay in memory, up to
+// IMAGE_CACHE_BYTES (the newest one always does).
+const IMAGE_CACHE_BYTES = 256 * 1024 * 1024;
+const imageCache = new Map(); // url → { promise, size }, least recently used first
+
+function loadImage(url) {
+  let e = imageCache.get(url);
+  if (e) {
+    imageCache.delete(url); // move to the end: used most recently
+    imageCache.set(url, e);
+    return e.promise;
+  }
+  e = { size: 0 };
+  e.promise = fetch(url).then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.blob();
+  });
+  imageCache.set(url, e);
+  e.promise.then(blob => { e.size = blob.size; trimImageCache(); }, () => imageCache.delete(url));
+  return e.promise;
+}
+
+function trimImageCache() {
+  let total = 0;
+  for (const e of imageCache.values()) total += e.size;
+  for (const [url, e] of imageCache) {
+    if (total <= IMAGE_CACHE_BYTES || imageCache.size <= 1) break;
+    imageCache.delete(url);
+    total -= e.size;
+  }
+}
+
 // keyedImage plays an animated picture frame by frame through the chroma key,
 // decoding it with ImageDecoder. Returns false if that isn't available.
-async function keyedImage(c, ev, box) {
+async function keyedImage(c, ev, box, blob) {
   if (!("ImageDecoder" in window) || !keyerFor(c)) return false;
   try {
-    const resp = await fetch(ev.image);
-    const decoder = new ImageDecoder({ data: resp.body, type: resp.headers.get("Content-Type") || "image/gif" });
+    const decoder = new ImageDecoder({ data: blob.stream(), type: blob.type || "image/gif" });
     c.decoder = decoder;
     await decoder.completed;
     const count = decoder.tracks.selectedTrack.frameCount;
@@ -203,20 +238,30 @@ async function keyedImage(c, ev, box) {
   }
 }
 
-function playGif(ev) {
+async function playGif(ev) {
   const c = begin(ev);
   // The picture stays for ev.duration seconds, or while the sound plays if
   // that's 0; playback ends when both are done.
   const done = { picture: false, sound: !ev.sound };
   const check = () => { if (done.picture && done.sound) c.finish(); };
 
+  let blob;
+  try {
+    blob = await loadImage(ev.image);
+  } catch {
+    c.fail("image");
+    return;
+  }
+  if (!live(c)) return;
+  const src = URL.createObjectURL(blob); // a new URL: the animation starts from its first frame
+  c.urls.push(src);
   const img = new Image();
   c.parts.push(img);
   img.onerror = () => c.fail("image");
   img.onload = async () => {
     if (!live(c)) return;
     const box = place(img.naturalWidth, img.naturalHeight, ev);
-    if (!(ev.key && await keyedImage(c, ev, box))) {
+    if (!(ev.key && await keyedImage(c, ev, box, blob))) {
       if (!live(c)) return;
       Object.assign(img.style, box);
       stage.append(img);
@@ -249,7 +294,7 @@ function playGif(ev) {
     report({ type: "started", play: c.play, duration: Math.max(ev.duration, soundLength) });
     check();
   };
-  img.src = ev.image;
+  img.src = src;
 }
 
 const events = new EventSource(base + "events?kind=" + kind);

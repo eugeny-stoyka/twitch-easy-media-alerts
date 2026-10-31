@@ -320,6 +320,21 @@ func TestMultiPlayGifs(t *testing.T) {
 	waitEvent(t, events, `"all":true`)
 }
 
+// An overwritten file gets a new address, so the page loads it anew instead
+// of showing the picture it kept; an unchanged one keeps its address.
+func TestMediaURLFollowsFileChanges(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "a.gif")
+	os.WriteFile(file, []byte("GIF89a"), 0o644)
+	first := mediaURL("g", "image", file)
+	if again := mediaURL("g", "image", file); again != first || !strings.HasPrefix(first, "media/g/image?v=") {
+		t.Fatalf("addresses of an unchanged file: %q, %q", first, again)
+	}
+	os.Chtimes(file, time.Now(), time.Now().Add(time.Minute)) // overwritten
+	if second := mediaURL("g", "image", file); second == first {
+		t.Errorf("address didn't change with the file: %q", second)
+	}
+}
+
 func TestMissingGifFiles(t *testing.T) {
 	dir := t.TempDir()
 	img := filepath.Join(dir, "a.gif")

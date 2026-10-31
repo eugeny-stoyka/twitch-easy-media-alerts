@@ -3,7 +3,9 @@ package app
 import (
 	_ "embed"
 	"net/url"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"twitch_easy_media_alerts/src/appinfo"
@@ -94,14 +96,20 @@ func (a *App) mediaFile(id, part string) (string, bool) {
 	return file, file != ""
 }
 
-// mediaURL is the page-relative address of a file served by mediaFile; the
-// file path makes the browser reload it when the file is changed.
+// mediaURL is the page-relative address of a file served by mediaFile. The
+// file's path and modification time make the page load it anew when another
+// file is chosen or the file is overwritten: the page keeps pictures it has
+// loaded, by address.
 func mediaURL(id, part, file string) string {
 	u := "media/" + id
 	if part != "" {
 		u += "/" + part
 	}
-	return u + "?v=" + url.QueryEscape(file)
+	u += "?v=" + url.QueryEscape(file)
+	if st, err := os.Stat(file); err == nil {
+		u += "&t=" + strconv.FormatInt(st.ModTime().UnixNano(), 36)
+	}
+	return u
 }
 
 // lookEvent holds the parts of a play event that place the picture.
