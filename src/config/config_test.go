@@ -153,6 +153,23 @@ func TestConfigNormalize(t *testing.T) {
 	}
 }
 
+// Multi-play is off for settings saved before it existed, and is kept once on.
+func TestMultiPlaySetting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	os.WriteFile(path, []byte(`{"commands":[{"id":"a","trigger":"!a"}],"gifs":[{"id":"g","trigger":"!g"}]}`), 0o644)
+	cfg, err := Load(path)
+	if err != nil || cfg.Commands[0].MultiPlay || cfg.Gifs[0].MultiPlay {
+		t.Fatalf("old settings: %+v, %v", cfg, err)
+	}
+	cfg.Commands[0].MultiPlay, cfg.Gifs[0].MultiPlay = true, true
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg, err = Load(path); err != nil || !cfg.Commands[0].MultiPlay || !cfg.Gifs[0].MultiPlay {
+		t.Fatalf("saved multi-play lost: %+v, %v", cfg, err)
+	}
+}
+
 func TestVideoConfigNormalize(t *testing.T) {
 	c := Config{
 		Videos: []VideoCommand{

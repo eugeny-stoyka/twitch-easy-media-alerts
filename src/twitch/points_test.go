@@ -103,6 +103,76 @@ func TestRefreshRefusedMeansLoggedOut(t *testing.T) {
 	}
 }
 
+func TestRefreshOutageKeepsLogin(t *testing.T) {
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		fakeTwitchID(t, func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"status":503,"message":"try later"}`, status)
+		})
+		_, err := refreshTokens(context.Background(), "client", "rt")
+		if err == nil || errors.Is(err, ErrUnauthorized) {
+			t.Errorf("refresh answered %d: %v, want a passing error, not ErrUnauthorized", status, err)
+		}
+	}
+}
+
+// Twitch accepts a refresh token only once, so callers that find the access
+// token expired at the same moment must share one refresh.
+func TestConcurrentCallersRefreshOnce(t *testing.T) {
+	var mu sync.Mutex
+	refreshes := 0
+	fakeTwitchID(t, func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		mu.Lock()
+		defer mu.Unlock()
+		if r.Form.Get("refresh_token") != "rt" || refreshes > 0 {
+			http.Error(w, `{"status":400,"message":"Invalid refresh token"}`, 400)
+			return
+		}
+		refreshes++
+		fmt.Fprint(w, `{"access_token":"fresh","refresh_token":"rt2"}`)
+	})
+
+	var saved []Tokens
+	p := &PointsListener{clientID: "client", userID: "42", tok: Tokens{Access: "expired", Refresh: "rt"},
+		cb: PointsCallbacks{OnTokens: func(tok Tokens) {
+			mu.Lock()
+			saved = append(saved, tok)
+			mu.Unlock()
+		}}}
+
+	const callers = 8
+	var arrived, done sync.WaitGroup
+	arrived.Add(callers)
+	errs := make(chan error, callers)
+	for range callers {
+		done.Go(func() {
+			errs <- p.withToken(context.Background(), func(access string) error {
+				switch access {
+				case "expired":
+					arrived.Done()
+					arrived.Wait() // every caller has seen the expired token
+					return ErrUnauthorized
+				case "fresh":
+					return nil
+				}
+				return fmt.Errorf("called with token %q", access)
+			})
+		})
+	}
+	done.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("withToken: %v", err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshes != 1 || len(saved) != 1 || saved[0] != (Tokens{"fresh", "rt2"}) {
+		t.Errorf("refreshes = %d, saved = %+v; want one refresh, saved once", refreshes, saved)
+	}
+}
+
 func eventSubMsg(id, typ string, payload string) string {
 	return fmt.Sprintf(`{"metadata":{"message_id":%q,"message_type":%q},"payload":%s}`, id, typ, payload)
 }

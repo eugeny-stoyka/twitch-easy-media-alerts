@@ -27,6 +27,9 @@ type Command struct {
 	Volume   int    `json:"volume"`   // 0..200 %
 	Device   string `json:"device"`   // endpoint ID, "" = use the general device
 	Cooldown int    `json:"cooldown"` // seconds between plays of this command
+	// MultiPlay plays it at once, over whatever plays, instead of one at a
+	// time; it doesn't hold up other commands either.
+	MultiPlay bool `json:"multiPlay"`
 }
 
 // Look is how a video or picture appears in OBS: size, place and chroma key.
@@ -91,6 +94,9 @@ type GifCommand struct {
 	Volume   int    `json:"volume"`   // 0..200 %
 	Duration int    `json:"duration"` // seconds to show the picture; 0 = while the sound plays
 	Cooldown int    `json:"cooldown"`
+	// MultiPlay shows it at once, over whatever is showing or playing, as
+	// for Command.
+	MultiPlay bool `json:"multiPlay"`
 	Look
 }
 

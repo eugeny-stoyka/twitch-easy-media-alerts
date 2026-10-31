@@ -20,11 +20,16 @@ const (
 	videoStartTimeout = 10 * time.Second // play sent, the page hasn't started it
 	videoEndGrace     = 5 * time.Second  // after the reported duration
 	maxVideoLength    = 30 * time.Minute
+
+	// maxMultiGifs caps the multi-play GIFs showing at once: each keyed one
+	// needs its own WebGL canvas, and browsers allow only a few of those.
+	maxMultiGifs = 10
 )
 
 var (
 	errBusyVideo   = i18n.WrapError("a video is already playing", "уже играет видео", audio.ErrBusy)
 	errBusyGif     = i18n.WrapError("a GIF is already showing", "уже показывается GIF", audio.ErrBusy)
+	errTooManyGifs = i18n.WrapError("too many GIFs are showing at once", "одновременно показывается слишком много GIF", audio.ErrBusy)
 	errNoVideoPage = i18n.NewError("there's nowhere to show videos: add a browser source in OBS or open the window on the OBS tab",
 		"видео некуда показать — добавьте в OBS источник «Браузер» или откройте окно на вкладке «OBS»")
 )
@@ -62,6 +67,7 @@ type videoPlayback struct {
 	id      string
 	trigger string
 	busy    error // what a command that arrives meanwhile is told
+	multi   bool  // a multi-play GIF, outside the one-at-a-time slot
 	started bool
 	timer   *time.Timer
 }
@@ -133,19 +139,59 @@ func (a *App) startOnPage(id, trigger string, busy error, interrupt bool, ev fun
 	if !ok {
 		return errNoVideoPage
 	}
+	pb := a.newPagePlaybackLocked(id, trigger, busy, false)
+	a.video = pb
+	a.sendPlayLocked(pb, target, ev)
+	a.emit(map[string]any{"type": "playing", "id": id})
+	return nil
+}
+
+// startOnPageMulti shows a multi-play GIF: at once, over whatever shows or
+// plays, neither waiting for the one-at-a-time slot nor taking it. While
+// maxMultiGifs of them show it returns errTooManyGifs.
+func (a *App) startOnPageMulti(id, trigger string, ev func(master float64) map[string]any) error {
+	a.mediaMu.Lock()
+	defer a.mediaMu.Unlock()
+	if len(a.multiGifs) >= maxMultiGifs {
+		return errTooManyGifs
+	}
+	target, ok := a.videoTarget()
+	if !ok {
+		return errNoVideoPage
+	}
+	pb := a.newPagePlaybackLocked(id, trigger, nil, true)
+	a.multiGifs[pb.seq] = pb
+	a.sendPlayLocked(pb, target, ev)
+	return nil
+}
+
+// newPagePlaybackLocked numbers a new play request and starts waiting for
+// the page to start it. Caller holds mediaMu.
+func (a *App) newPagePlaybackLocked(id, trigger string, busy error, multi bool) *videoPlayback {
+	a.videoSeq++
+	pb := &videoPlayback{seq: a.videoSeq, id: id, trigger: trigger, busy: busy, multi: multi}
+	pb.timer = time.AfterFunc(videoStartTimeout, func() { a.videoNotStarted(pb.seq) })
+	return pb
+}
+
+// sendPlayLocked sends pb's play event to the target page; ev gets the
+// master volume and makes the rest of the event. Caller holds mediaMu.
+func (a *App) sendPlayLocked(pb *videoPlayback, target string, ev func(master float64) map[string]any) {
 	a.mu.Lock()
 	master := float64(a.cfg.MasterVolume) / 100
 	a.mu.Unlock()
-
-	a.videoSeq++
-	pb := &videoPlayback{seq: a.videoSeq, id: id, trigger: trigger, busy: busy}
-	pb.timer = time.AfterFunc(videoStartTimeout, func() { a.videoNotStarted(pb.seq) })
-	a.video = pb
 	e := ev(master)
-	e["type"], e["play"] = "play", pb.seq
+	e["type"], e["play"], e["multi"] = "play", pb.seq, pb.multi
 	a.overlay.Send(e, target)
-	a.emit(map[string]any{"type": "playing", "id": id})
-	return nil
+}
+
+// pagePlaybackLocked finds play request seq among what is showing. Caller
+// holds mediaMu.
+func (a *App) pagePlaybackLocked(seq int) *videoPlayback {
+	if a.video != nil && a.video.seq == seq {
+		return a.video
+	}
+	return a.multiGifs[seq]
 }
 
 // startVideo shows a video in OBS.
@@ -161,7 +207,16 @@ func (a *App) startVideo(v config.VideoCommand, interrupt bool) error {
 
 // startGif shows an animated picture with its sound in OBS.
 func (a *App) startGif(g config.GifCommand, interrupt bool) error {
-	return a.startOnPage(g.ID, g.Trigger, errBusyGif, interrupt, func(master float64) map[string]any {
+	return a.startOnPage(g.ID, g.Trigger, errBusyGif, interrupt, gifEvent(g))
+}
+
+// startGifMulti shows a multi-play GIF: at once, over whatever shows or plays.
+func (a *App) startGifMulti(g config.GifCommand) error {
+	return a.startOnPageMulti(g.ID, g.Trigger, gifEvent(g))
+}
+
+func gifEvent(g config.GifCommand) func(master float64) map[string]any {
+	return func(master float64) map[string]any {
 		e := lookEvent(g.Look)
 		e["kind"] = "gif"
 		e["image"] = mediaURL(g.ID, "image", g.Image)
@@ -172,10 +227,11 @@ func (a *App) startGif(g config.GifCommand, interrupt bool) error {
 		e["volume"] = float64(g.Volume) / 100 * master
 		e["duration"] = g.ShowFor()
 		return e
-	})
+	}
 }
 
-// stopVideoLocked ends the current video. Caller holds mediaMu.
+// stopVideoLocked ends the current video. Multi-play GIFs stay. Caller
+// holds mediaMu.
 func (a *App) stopVideoLocked() {
 	if a.video == nil {
 		return
@@ -187,17 +243,32 @@ func (a *App) stopVideoLocked() {
 	go a.drainRedemptions()
 }
 
+// stopMultiGifsLocked ends every multi-play GIF (and anything else still on
+// the pages). Caller holds mediaMu.
+func (a *App) stopMultiGifsLocked() {
+	for seq, pb := range a.multiGifs {
+		pb.timer.Stop()
+		delete(a.multiGifs, seq)
+	}
+	a.overlay.Send(map[string]any{"type": "stop", "all": true}, "")
+	go a.drainRedemptions()
+}
+
 // endVideo marks play request seq as finished, logging problem if set.
 func (a *App) endVideo(seq int, problem string) {
 	a.mediaMu.Lock()
-	pb := a.video
-	if pb == nil || pb.seq != seq {
+	pb := a.pagePlaybackLocked(seq)
+	if pb == nil {
 		a.mediaMu.Unlock()
 		return
 	}
 	pb.timer.Stop()
-	a.video = nil
-	a.emit(map[string]any{"type": "playing", "id": ""})
+	if pb.multi {
+		delete(a.multiGifs, seq)
+	} else {
+		a.video = nil
+		a.emit(map[string]any{"type": "playing", "id": ""})
+	}
 	a.mediaMu.Unlock()
 	go a.drainRedemptions()
 	if problem != "" {
@@ -207,7 +278,8 @@ func (a *App) endVideo(seq int, problem string) {
 
 func (a *App) videoNotStarted(seq int) {
 	a.mediaMu.Lock()
-	stale := a.video == nil || a.video.seq != seq || a.video.started
+	pb := a.pagePlaybackLocked(seq)
+	stale := pb == nil || pb.started
 	a.mediaMu.Unlock()
 	if !stale {
 		a.endVideo(seq, i18n.L("the video window didn't respond — check that it's open", "окно видео не ответило — проверьте, что оно открыто"))
@@ -219,8 +291,8 @@ func (a *App) onVideoReport(r overlay.Report) {
 	case "started":
 		a.mediaMu.Lock()
 		defer a.mediaMu.Unlock()
-		pb := a.video
-		if pb == nil || pb.seq != r.Play {
+		pb := a.pagePlaybackLocked(r.Play)
+		if pb == nil {
 			return
 		}
 		pb.started = true
@@ -254,19 +326,32 @@ func (a *App) startSound(cmd config.Command, interrupt bool) error {
 	return a.play(cmd, dev, vol, interrupt)
 }
 
-// stopAll stops whatever sound or video is playing and drops queued rewards.
+// startSoundMulti plays a multi-play sound: at once, over whatever plays.
+func (a *App) startSoundMulti(cmd config.Command) error {
+	a.mu.Lock()
+	dev, vol := a.output(cmd)
+	a.mu.Unlock()
+	return a.player.PlayOverlay(cmd.File, dev, vol, func(warn string, err error) {
+		a.soundDone(cmd, warn, err)
+		go a.drainRedemptions() // a reward may be waiting for a free spot
+	})
+}
+
+// stopAll stops every sound, video and GIF, multi-play ones included, and
+// drops queued rewards.
 func (a *App) stopAll() {
 	a.clearRedemptions()
 	a.mediaMu.Lock()
 	defer a.mediaMu.Unlock()
 	a.player.Stop()
 	a.stopVideoLocked()
+	a.stopMultiGifsLocked()
 }
 
 func (a *App) isPlaying() bool {
 	a.mediaMu.Lock()
 	defer a.mediaMu.Unlock()
-	return a.video != nil || a.player.Current() != ""
+	return a.video != nil || len(a.multiGifs) > 0 || a.player.Active()
 }
 
 // setVideoWindow opens or hides the OBS window and remembers that. UI thread
@@ -280,9 +365,8 @@ func (a *App) setVideoWindow(open bool) {
 	shown := a.videoWindowShown.Load()
 	a.mu.Lock()
 	a.cfg.Video.WindowOpen = shown
-	cfg := a.cfg
 	a.mu.Unlock()
-	if err := a.save(cfg); err != nil {
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
 	a.emit(map[string]any{"type": "videoWindow", "open": shown})
@@ -299,6 +383,7 @@ func (a *App) showVideoWindow(activate bool) {
 func (a *App) hideVideoWindow() {
 	a.mediaMu.Lock()
 	a.stopVideoLocked()
+	a.stopMultiGifsLocked()
 	a.mediaMu.Unlock()
 	if a.videoWin != nil {
 		a.videoWin.Hide()
@@ -337,9 +422,8 @@ func (a *App) createVideoWindow() bool {
 func (a *App) onVideoWindowMoved(x, y int) {
 	a.mu.Lock()
 	a.cfg.Video.WindowX, a.cfg.Video.WindowY, a.cfg.Video.WindowPos = x, y, true
-	cfg := a.cfg
 	a.mu.Unlock()
-	if err := a.save(cfg); err != nil {
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
 }

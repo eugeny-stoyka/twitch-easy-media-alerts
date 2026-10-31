@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"twitch_easy_media_alerts/src/audio"
@@ -17,7 +18,8 @@ import (
 // Channel point rewards play what the "Баллы канала" tab sets up for a
 // reward with that title; chat messages can't run those. Viewers paid for
 // rewards, so instead of being skipped while something plays they wait in a
-// queue.
+// queue. Multi-play ones start at once, past the queue, and wait only while
+// too many multi-play sounds or GIFs are on.
 
 const maxRedeemQueue = 50
 
@@ -30,6 +32,7 @@ type pointsStatus struct {
 // pendingPlay is a command a reward is waiting to run.
 type pendingPlay struct {
 	who, file, kind string
+	multi           bool // multi-play: doesn't wait for the one-at-a-time slot
 	start           func() error
 }
 
@@ -97,9 +100,8 @@ func (a *App) saveTokens(t twitch.Tokens) {
 	}
 	a.mu.Lock()
 	a.cfg.Twitch.Tokens = enc
-	cfg := a.cfg
 	a.mu.Unlock()
-	if err := a.save(cfg); err != nil {
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
 }
@@ -150,9 +152,8 @@ func (a *App) twitchLogin() error {
 		}
 		a.mu.Lock()
 		a.cfg.Twitch.Login, a.cfg.Twitch.UserID, a.cfg.Twitch.Tokens = info.Login, info.UserID, enc
-		cfg := a.cfg
 		a.mu.Unlock()
-		if err := a.save(cfg); err != nil {
+		if err := a.saveConfig(); err != nil {
 			a.logSaveError(err)
 		}
 		a.log("info", i18n.L("Logged in to Twitch: ", "Вход в Twitch: ")+info.Login)
@@ -178,9 +179,8 @@ func (a *App) twitchLogout() {
 	a.mu.Lock()
 	acc := a.cfg.Twitch
 	a.cfg.Twitch = config.TwitchAccount{ClientID: acc.ClientID}
-	cfg := a.cfg
 	a.mu.Unlock()
-	if err := a.save(cfg); err != nil {
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
 	if tok, err := twitch.UnprotectTokens(acc.Tokens); err == nil && acc.ClientID != "" {
@@ -201,6 +201,9 @@ func (a *App) rewardCommand(title string) (pendingPlay, bool) {
 	}
 	for _, c := range a.cfg.Rewards.Sounds {
 		if c.Enabled && twitch.RewardKey(c.Trigger) == key {
+			if c.MultiPlay {
+				return pendingPlay{file: c.File, kind: "play", multi: true, start: func() error { return a.startSoundMulti(c) }}, true
+			}
 			return pendingPlay{file: c.File, kind: "play", start: func() error { return a.startSound(c, false) }}, true
 		}
 	}
@@ -211,6 +214,9 @@ func (a *App) rewardCommand(title string) (pendingPlay, bool) {
 	}
 	for _, g := range a.cfg.Rewards.Gifs {
 		if g.Enabled && twitch.RewardKey(g.Trigger) == key {
+			if g.MultiPlay {
+				return pendingPlay{file: g.Image, kind: "gif", multi: true, start: func() error { return a.startGifMulti(g) }}, true
+			}
 			return pendingPlay{file: g.Image, kind: "gif", start: func() error { return a.startGif(g, false) }}, true
 		}
 	}
@@ -243,7 +249,10 @@ func (a *App) onRedemption(user, reward, input string) {
 
 	a.redeemMu.Lock()
 	defer a.redeemMu.Unlock()
-	if len(a.redeemQueue) == 0 {
+	// A reward tries to start at once unless one of its kind waits already:
+	// single-play rewards wait for the one-at-a-time slot, multi-play ones
+	// only while too many multi-play sounds or GIFs are on.
+	if !slices.ContainsFunc(a.redeemQueue, func(q pendingPlay) bool { return q.multi == p.multi }) {
 		if err := p.start(); !errors.Is(err, audio.ErrBusy) {
 			a.logRedeemed(p, err)
 			return
@@ -265,24 +274,27 @@ func (a *App) logRedeemed(p pendingPlay, err error) {
 	a.log(p.kind, p.who+" → "+filepath.Base(p.file))
 }
 
-// drainRedemptions starts the next queued reward if nothing plays. It runs
-// whenever playback ends.
+// drainRedemptions starts the queued rewards that can start now. It runs
+// whenever playback ends. Each kind (single-play, multi-play) keeps its
+// order, and one kind waiting doesn't hold up the other.
 func (a *App) drainRedemptions() {
 	a.redeemMu.Lock()
 	defer a.redeemMu.Unlock()
-	if len(a.redeemQueue) == 0 {
-		return
+	busy := map[bool]bool{} // by pendingPlay.multi
+	kept := a.redeemQueue[:0]
+	for _, p := range a.redeemQueue {
+		if !busy[p.multi] {
+			err := p.start()
+			if !errors.Is(err, audio.ErrBusy) {
+				a.logRedeemed(p, err) // started, or failed straight away
+				continue
+			}
+			busy[p.multi] = true // try again when something ends
+		}
+		kept = append(kept, p)
 	}
-	p := a.redeemQueue[0]
-	err := p.start()
-	if errors.Is(err, audio.ErrBusy) {
-		return // something else got in first; try again when it ends
-	}
-	a.redeemQueue = a.redeemQueue[1:]
-	a.logRedeemed(p, err)
-	if err != nil {
-		go a.drainRedemptions() // it failed straight away; don't hold up the rest
-	}
+	clear(a.redeemQueue[len(kept):]) // drop the started ones' closures
+	a.redeemQueue = kept
 }
 
 // clearRedemptions empties the queue (the Stop button means silence).

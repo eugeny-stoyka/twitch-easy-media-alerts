@@ -45,8 +45,12 @@ type App struct {
 	lastPlay map[string]time.Time
 	lastAny  time.Time
 
-	// cfgFileMu keeps writing the settings file and moving it apart.
+	// cfgFileMu keeps writing the settings file and moving it apart. Take it
+	// before mu, never while holding mu.
 	cfgFileMu sync.Mutex
+
+	// checkFiles asks fileChecker to look for missing files again.
+	checkFiles chan struct{}
 
 	chatMu sync.Mutex // serialises connect/disconnect; never held with mu
 	chat   *twitch.ChatClient
@@ -63,10 +67,11 @@ type App struct {
 	redeemQueue []pendingPlay
 
 	// mediaMu keeps to one sound or video at a time. Take it before mu.
-	mediaMu  sync.Mutex
-	player   *audio.Player
-	video    *videoPlayback
-	videoSeq int
+	mediaMu   sync.Mutex
+	player    *audio.Player
+	video     *videoPlayback
+	multiGifs map[int]*videoPlayback // multi-play GIFs showing, by play number
+	videoSeq  int
 
 	overlay          *overlay.Server
 	obsPages         atomic.Int32      // connected OBS browser sources
@@ -80,9 +85,11 @@ type App struct {
 // New makes the app; Run starts it.
 func New() *App {
 	a := &App{
-		status:   twitch.ChatStatus{State: twitch.StateDisconnected},
-		lastPlay: map[string]time.Time{},
-		player:   audio.NewPlayer(),
+		status:     twitch.ChatStatus{State: twitch.StateDisconnected},
+		lastPlay:   map[string]time.Time{},
+		player:     audio.NewPlayer(),
+		multiGifs:  map[int]*videoPlayback{},
+		checkFiles: make(chan struct{}, 1),
 	}
 	a.player.OnChange = func(id string) {
 		a.emit(map[string]any{"type": "playing", "id": id})
@@ -117,12 +124,12 @@ func (a *App) Run() {
 		a.log("error", fmt.Sprintf(i18n.L("The settings file is damaged (%v); it was kept as %s and the default settings were loaded.",
 			"Файл настроек повреждён (%v), он сохранён как %s. Загружены настройки по умолчанию."), loadErr, filepath.Base(broken)))
 	}
-	// Save right away so a freshly made browser source token is kept.
 	cfg.Normalize()
-	if err := a.save(cfg); err != nil {
+	a.cfg = cfg
+	// Save right away so a freshly made browser source token is kept.
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
-	a.cfg = cfg
 
 	var portBusy bool
 	var err error
@@ -178,6 +185,7 @@ func (a *App) Run() {
 	}
 	a.updateTrayTip()
 
+	go a.fileChecker()
 	a.bind()
 	w.SetHtml(ui.Index)
 
@@ -225,11 +233,13 @@ func (a *App) onPagesChanged(obs int) {
 	a.emit(map[string]any{"type": "pages", "obs": obs})
 }
 
-// save writes cfg to the settings file.
-func (a *App) save(cfg config.Config) error {
+// saveConfig writes the current settings to the file. Change a.cfg first
+// (under mu), then call this without holding mu. The copy is taken under
+// cfgFileMu, so an older copy can never overwrite a newer one.
+func (a *App) saveConfig() error {
 	a.cfgFileMu.Lock()
 	defer a.cfgFileMu.Unlock()
-	return config.Save(a.cfgPath, cfg)
+	return config.Save(a.cfgPath, a.config())
 }
 
 // logSaveError reports settings that couldn't be written.
@@ -258,9 +268,12 @@ func (a *App) emit(ev map[string]any) {
 	if err != nil {
 		return
 	}
-	a.w.Dispatch(func() {
-		a.w.Eval("window.onAppEvent && window.onAppEvent(" + string(b) + ")")
-	})
+	a.w.Dispatch(func() { a.evalEvent(b) })
+}
+
+// evalEvent hands an event in JSON to the page. UI thread only.
+func (a *App) evalEvent(b []byte) {
+	a.w.Eval("window.onAppEvent && window.onAppEvent(" + string(b) + ")")
 }
 
 func (a *App) log(kind, text string) {
@@ -354,12 +367,11 @@ func (a *App) setCommandsEnabled(on bool) {
 	a.mu.Lock()
 	changed := a.cfg.CommandsEnabled != on
 	a.cfg.CommandsEnabled = on
-	cfg := a.cfg
 	a.mu.Unlock()
 	if !changed {
 		return
 	}
-	if err := a.save(cfg); err != nil {
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
 	if on {
@@ -372,7 +384,8 @@ func (a *App) setCommandsEnabled(on bool) {
 }
 
 // onMessage handles a chat message: the first matching sound command wins,
-// then video commands are checked.
+// then video commands are checked, then GIFs. Multi-play sounds and GIFs
+// start at once, over whatever plays.
 func (a *App) onMessage(user, text string) {
 	a.mu.Lock()
 	if !a.cfg.CommandsEnabled {
@@ -389,6 +402,9 @@ func (a *App) onMessage(user, text string) {
 		cmd := a.cfg.Commands[i]
 		id, trigger, file, cooldown = cmd.ID, cmd.Trigger, cmd.File, cmd.Cooldown
 		start = func() error { return a.startSound(cmd, false) }
+		if cmd.MultiPlay {
+			start = func() error { return a.startSoundMulti(cmd) }
+		}
 	} else if i := twitch.MatchCommand(a.cfg.Videos, text); i >= 0 {
 		v := a.cfg.Videos[i]
 		id, trigger, file, cooldown = v.ID, v.Trigger, v.File, v.Cooldown
@@ -398,6 +414,9 @@ func (a *App) onMessage(user, text string) {
 		g := a.cfg.Gifs[i]
 		id, trigger, file, cooldown = g.ID, g.Trigger, g.Image, g.Cooldown
 		start = func() error { return a.startGif(g, false) }
+		if g.MultiPlay {
+			start = func() error { return a.startGifMulti(g) }
+		}
 		kind = "gif"
 	} else {
 		a.mu.Unlock()
@@ -426,6 +445,8 @@ func (a *App) onMessage(user, text string) {
 	// skipped and don't use up their cooldown.
 	if err := start(); err != nil {
 		switch {
+		case errors.Is(err, audio.ErrTooMany), errors.Is(err, errTooManyGifs):
+			a.log("skip", who+" — "+err.Error())
 		case errors.Is(err, errBusyVideo):
 			a.log("skip", who+i18n.L(" — a video is already playing", " — уже играет видео"))
 		case errors.Is(err, errBusyGif):
@@ -456,13 +477,18 @@ func (a *App) output(cmd config.Command) (device string, volume float64) {
 // play starts cmd's sound; see Player.Play for interrupt and ErrBusy.
 func (a *App) play(cmd config.Command, device string, volume float64, interrupt bool) error {
 	return a.player.Play(cmd.ID, cmd.File, device, volume, interrupt, func(warn string, err error) {
-		if warn != "" {
-			a.log("warn", cmd.Trigger+": "+warn)
-		}
-		if err != nil {
-			a.log("error", cmd.Trigger+": "+err.Error())
-		}
+		a.soundDone(cmd, warn, err)
 	})
+}
+
+// soundDone logs how cmd's sound went once it has ended.
+func (a *App) soundDone(cmd config.Command, warn string, err error) {
+	if warn != "" {
+		a.log("warn", cmd.Trigger+": "+warn)
+	}
+	if err != nil {
+		a.log("error", cmd.Trigger+": "+err.Error())
+	}
 }
 
 func (a *App) trayMenu() []win.MenuItem {
@@ -503,9 +529,8 @@ func (a *App) connect(input string) error {
 	}
 	a.mu.Lock()
 	a.cfg.Channel = input
-	cfg := a.cfg
 	a.mu.Unlock()
-	if err := a.save(cfg); err != nil {
+	if err := a.saveConfig(); err != nil {
 		a.logSaveError(err)
 	}
 	go a.setChannel(login)
@@ -565,42 +590,81 @@ type initialState struct {
 	Version         string            `json:"version"`
 }
 
+// initialState gathers what the page needs to start. devices, devErr and
+// missing come from slow checks made beforehand, off the UI thread.
+func (a *App) initialState(devices []audio.Device, devErr error, missing []string) initialState {
+	playing := a.player.Current()
+	a.mediaMu.Lock()
+	if a.video != nil {
+		playing = a.video.id
+	}
+	a.mediaMu.Unlock()
+	cfgPath := a.configPath() // cfgFileMu can't be taken under mu
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	st := initialState{
+		Config:          a.cfg,
+		Devices:         devices,
+		Missing:         missing,
+		Status:          a.status,
+		Logs:            append([]LogEntry(nil), a.logs...),
+		Playing:         playing,
+		MediaBase:       a.overlay.MediaBase(),
+		ObsURL:          a.overlay.PageURL(overlay.PageOBS),
+		ObsPages:        int(a.obsPages.Load()),
+		VideoWindowOpen: a.videoWindowShown.Load(),
+		Points:          a.pointsSt,
+		ConfigPath:      cfgPath,
+		SettingsLocked:  config.DirLocked(),
+		Version:         appinfo.Version,
+	}
+	if devErr != nil {
+		st.DeviceError = devErr.Error()
+	}
+	return st
+}
+
+// recheckFiles asks for the commands' files to be checked again; the page
+// gets a "missing" event. Requests made while a check runs fold into one
+// more check, so the last event always matches the latest settings.
+func (a *App) recheckFiles() {
+	select {
+	case a.checkFiles <- struct{}{}:
+	default:
+	}
+}
+
+// fileChecker checks the files off the UI thread: a sleeping network drive
+// or an unplugged one can take seconds to answer.
+func (a *App) fileChecker() {
+	for range a.checkFiles {
+		a.emit(map[string]any{"type": "missing", "ids": missingFiles(a.config())})
+	}
+}
+
 // bind exposes Go functions to the page. They run on the UI thread, so
 // anything slow or modal is pushed out of the WebView2 callback.
 func (a *App) bind() {
-	a.w.Bind("goGetInitial", func() initialState {
-		devices, err := audio.ListOutputDevices()
-		playing := a.player.Current()
-		a.mediaMu.Lock()
-		if a.video != nil {
-			playing = a.video.id
-		}
-		a.mediaMu.Unlock()
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		st := initialState{
-			Config:          a.cfg,
-			Devices:         devices,
-			Missing:         missingFiles(a.cfg),
-			Status:          a.status,
-			Logs:            append([]LogEntry(nil), a.logs...),
-			Playing:         playing,
-			MediaBase:       a.overlay.MediaBase(),
-			ObsURL:          a.overlay.PageURL(overlay.PageOBS),
-			ObsPages:        int(a.obsPages.Load()),
-			VideoWindowOpen: a.videoWindowShown.Load(),
-			Points:          a.pointsSt,
-			ConfigPath:      a.configPath(),
-			SettingsLocked:  config.DirLocked(),
-			Version:         appinfo.Version,
-		}
-		if err != nil {
-			st.DeviceError = err.Error()
-		}
-		return st
+	// goGetInitial answers with an "initial" event. Listing the devices and
+	// checking the files can be slow, so they run off the UI thread; the rest
+	// of the state is taken on the UI thread right as it's sent, so every
+	// event emitted after it reaches the page after it.
+	a.w.Bind("goGetInitial", func() {
+		go func() {
+			devices, devErr := audio.ListOutputDevices()
+			missing := missingFiles(a.config())
+			a.w.Dispatch(func() {
+				b, err := json.Marshal(map[string]any{"type": "initial", "state": a.initialState(devices, devErr, missing)})
+				if err == nil {
+					a.evalEvent(b)
+				}
+			})
+		}()
 	})
 
-	a.w.Bind("goSaveConfig", func(cfg config.Config) ([]string, error) {
+	// goSaveConfig takes the page's settings; whether their files exist comes
+	// back as a "missing" event.
+	a.w.Bind("goSaveConfig", func(cfg config.Config) error {
 		cfg.Normalize()
 		a.mu.Lock()
 		old := a.cfg.Video
@@ -614,6 +678,7 @@ func (a *App) bind() {
 		clientChanged := cfg.Twitch.ClientID != oldTwitch.ClientID && oldTwitch.Tokens != ""
 		a.cfg = cfg
 		a.mu.Unlock()
+		a.recheckFiles()
 		if i18n.Russian() != (cfg.Language == "ru") {
 			i18n.SetLanguage(cfg.Language)
 			a.updateTrayTip()
@@ -624,13 +689,13 @@ func (a *App) bind() {
 				a.videoWin.SetClientSize(cfg.Video.Width, cfg.Video.Height)
 			}
 		}
-		if err := a.save(cfg); err != nil {
-			return nil, fmt.Errorf(i18n.L("couldn't save the settings: %w", "не удалось сохранить настройки: %w"), err)
+		if err := a.saveConfig(); err != nil {
+			return fmt.Errorf(i18n.L("couldn't save the settings: %w", "не удалось сохранить настройки: %w"), err)
 		}
 		if clientChanged {
 			go a.twitchLogout()
 		}
-		return missingFiles(cfg), nil
+		return nil
 	})
 
 	a.w.Bind("goConnect", a.connect)
@@ -711,7 +776,18 @@ func (a *App) bind() {
 
 	a.w.Bind("goStop", a.stopAll)
 
-	a.w.Bind("goRefreshDevices", audio.ListOutputDevices)
+	// goRefreshDevices lists the output devices off the UI thread and answers
+	// with a "devices" event.
+	a.w.Bind("goRefreshDevices", func() {
+		go func() {
+			devices, err := audio.ListOutputDevices()
+			ev := map[string]any{"type": "devices", "devices": devices, "error": ""}
+			if err != nil {
+				ev["error"] = err.Error()
+			}
+			a.emit(ev)
+		}()
+	})
 
 	// The settings folder: pick one and move the file there (asking before
 	// replacing settings already in it), or show it in Explorer.
@@ -762,7 +838,6 @@ func (a *App) moveSettings(dir string) (string, error) {
 	if config.DirLocked() {
 		return "", fmt.Errorf(i18n.L("the settings folder is set by the %s environment variable", "папку настроек задаёт переменная окружения %s"), config.DirEnv)
 	}
-	cfg := a.config()
 	a.cfgFileMu.Lock()
 	defer a.cfgFileMu.Unlock()
 	old := a.cfgPath
@@ -778,7 +853,7 @@ func (a *App) moveSettings(dir string) (string, error) {
 			return "", fmt.Errorf(i18n.L("couldn't keep the old settings file as .bak: %w", "не удалось сохранить прежний файл настроек как .bak: %w"), err)
 		}
 	}
-	if err := config.Save(path, cfg); err != nil {
+	if err := config.Save(path, a.config()); err != nil {
 		return "", fmt.Errorf(i18n.L("couldn't write the settings to the new folder: %w", "не удалось записать настройки в новую папку: %w"), err)
 	}
 	if err := config.RememberDir(dir); err != nil {

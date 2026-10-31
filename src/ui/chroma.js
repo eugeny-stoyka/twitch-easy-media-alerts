@@ -51,11 +51,12 @@ void main() {
   gl_FragColor = vec4(rgb * alpha, alpha);    // premultiplied
 }`;
 
-// createKeyer returns { canvas, draw } or null without WebGL. draw renders
-// a video's current frame, an image or a VideoFrame (from ImageDecoder) into
-// canvas at width x height, keyed with
+// createKeyer returns { canvas, draw, release } or null without WebGL. draw
+// renders a video's current frame, an image or a VideoFrame (from
+// ImageDecoder) into canvas at width x height, keyed with
 // k = { color: "#rrggbb", similarity, smoothness, spill }. Set preserve to
 // copy the result out of the canvas later (drawImage after the frame).
+// release frees the WebGL context at once (browsers allow only a few).
 function createKeyer(preserve) {
   const canvas = document.createElement("canvas");
   const gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: true, antialias: false, preserveDrawingBuffer: !!preserve });
@@ -107,6 +108,10 @@ function createKeyer(preserve) {
       gl.uniform1f(uSpill, Math.max(k.spill, 1) / 1000);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    },
+    release() {
+      const lose = gl.getExtension("WEBGL_lose_context");
+      if (lose) lose.loseContext();
     },
   };
 }

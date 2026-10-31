@@ -79,7 +79,9 @@ func AwaitDeviceAuth(ctx context.Context, clientID string, d DeviceAuth) (Tokens
 	return Tokens{}, errors.New(i18n.L("the login timed out — try again", "время на вход истекло — попробуйте ещё раз"))
 }
 
-// refreshTokens gets a new access token. Any refusal means the login is gone.
+// refreshTokens gets a new access token. Twitch refusing the refresh token
+// (a 4xx answer) means the login is gone; a 5xx or 429 answer is a passing
+// problem, returned as is so the caller tries again later.
 func refreshTokens(ctx context.Context, clientID, refresh string) (Tokens, error) {
 	var t tokenResponse
 	err := postForm(ctx, twitchIDURL+"/token", url.Values{
@@ -88,7 +90,7 @@ func refreshTokens(ctx context.Context, clientID, refresh string) (Tokens, error
 		"refresh_token": {refresh},
 	}, &t)
 	var apiErr *apiError
-	if errors.As(err, &apiErr) {
+	if errors.As(err, &apiErr) && apiErr.Status/100 == 4 && apiErr.Status != http.StatusTooManyRequests {
 		return Tokens{}, fmt.Errorf("%w (%s)", ErrUnauthorized, apiErr.Message)
 	}
 	if err != nil {

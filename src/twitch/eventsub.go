@@ -29,6 +29,9 @@ type PointsListener struct {
 
 	mu  sync.Mutex
 	tok Tokens
+	// refreshMu lets one caller at a time refresh the tokens: a refresh
+	// token works only once, so a second refresh with it would end the login.
+	refreshMu sync.Mutex
 
 	seen   map[string]bool // recent message ids: Twitch may send one twice
 	recent []string
@@ -55,16 +58,35 @@ func (p *PointsListener) Stop() {
 // withToken runs f with the access token, refreshing it once if Twitch says
 // it has expired.
 func (p *PointsListener) withToken(ctx context.Context, f func(access string) error) error {
-	p.mu.Lock()
-	tok := p.tok
-	p.mu.Unlock()
+	tok := p.tokens()
 	err := f(tok.Access)
 	if !errors.Is(err, ErrUnauthorized) {
 		return err
 	}
-	tok, err = refreshTokens(ctx, p.clientID, tok.Refresh)
-	if err != nil {
+	if tok, err = p.refresh(ctx, tok); err != nil {
 		return err
+	}
+	return f(tok.Access)
+}
+
+func (p *PointsListener) tokens() Tokens {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.tok
+}
+
+// refresh replaces expired tokens with new ones. Callers that found the same
+// tokens expired at once share a single refresh: Twitch accepts a refresh
+// token only once, and using it again would end the login.
+func (p *PointsListener) refresh(ctx context.Context, expired Tokens) (Tokens, error) {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+	if cur := p.tokens(); cur != expired {
+		return cur, nil // another caller has refreshed them meanwhile
+	}
+	tok, err := refreshTokens(ctx, p.clientID, expired.Refresh)
+	if err != nil {
+		return Tokens{}, err
 	}
 	p.mu.Lock()
 	p.tok = tok
@@ -72,7 +94,7 @@ func (p *PointsListener) withToken(ctx context.Context, f func(access string) er
 	if p.cb.OnTokens != nil {
 		p.cb.OnTokens(tok)
 	}
-	return f(tok.Access)
+	return tok, nil
 }
 
 // Rewards lists the channel's custom rewards with the listener's login.

@@ -68,13 +68,24 @@ func (s *fileStreamer) Close() error {
 // ErrBusy is returned by Play when another sound is still playing.
 var ErrBusy = i18n.NewError("another sound is already playing", "уже играет другой звук")
 
-// Player plays one sound at a time on a WASAPI endpoint.
+// MaxOverlays caps the multi-play sounds playing at once, so a chat spamming
+// a command can't open dozens of audio streams.
+const MaxOverlays = 10
+
+// ErrTooMany is returned by PlayOverlay while MaxOverlays sounds play. It
+// counts as ErrBusy: the sound can play once one of them ends.
+var ErrTooMany = i18n.WrapError("too many sounds are playing at once", "одновременно играет слишком много звуков", ErrBusy)
+
+// Player plays one sound at a time on a WASAPI endpoint, plus multi-play
+// sounds (PlayOverlay) that sound over it and over each other.
 type Player struct {
-	mu  sync.Mutex
-	cur *playback
+	mu       sync.Mutex
+	cur      *playback
+	overlays map[*playback]bool
 
 	// OnChange gets the key of the sound that started playing, or "" when
 	// playback ends. It runs under the player's lock and must not block.
+	// Multi-play sounds don't report here.
 	OnChange func(key string)
 }
 
@@ -104,17 +115,27 @@ func (p *Player) Current() string {
 	return p.cur.key
 }
 
-// Stop cuts the current sound short.
+// Active reports whether any sound plays, multi-play ones included.
+func (p *Player) Active() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cur != nil || len(p.overlays) > 0
+}
+
+// Stop cuts every sound short, multi-play ones included.
 func (p *Player) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.cur != nil {
 		p.cur.cancel()
 	}
+	for pb := range p.overlays {
+		pb.cancel()
+	}
 }
 
 // StopAndWait cuts the current sound short and returns once it has ended
-// (and OnChange has reported that).
+// (and OnChange has reported that). Multi-play sounds go on.
 func (p *Player) StopAndWait() {
 	p.mu.Lock()
 	cur := p.cur
@@ -149,27 +170,49 @@ func (p *Player) Play(key, path, devID string, volume float64, interrupt bool, d
 	p.cur = pb
 	p.changed(key)
 	p.mu.Unlock()
-
-	go func() {
-		var warn string
-		err := withCOM(func() error {
-			var err error
-			warn, err = playStream(ctx, path, devID, volume)
-			return err
-		})
-		cancel()
-		p.mu.Lock()
-		if p.cur == pb {
-			p.cur = nil
-			p.changed("")
-		}
-		p.mu.Unlock()
-		close(pb.done)
-		if done != nil {
-			done(warn, err)
-		}
-	}()
+	go p.run(ctx, pb, path, devID, volume, done)
 	return nil
+}
+
+// PlayOverlay starts a multi-play sound: it plays at once, over whatever
+// plays, and neither waits for other sounds nor makes them wait. While
+// MaxOverlays such sounds play it returns ErrTooMany. done is as for Play.
+func (p *Player) PlayOverlay(path, devID string, volume float64, done func(warn string, err error)) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.overlays) >= MaxOverlays {
+		return ErrTooMany
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	pb := &playback{cancel: cancel, done: make(chan struct{})}
+	if p.overlays == nil {
+		p.overlays = map[*playback]bool{}
+	}
+	p.overlays[pb] = true
+	go p.run(ctx, pb, path, devID, volume, done)
+	return nil
+}
+
+// run plays one sound to the end (or until ctx is cancelled) and forgets it.
+func (p *Player) run(ctx context.Context, pb *playback, path, devID string, volume float64, done func(warn string, err error)) {
+	var warn string
+	err := withCOM(func() error {
+		var err error
+		warn, err = playStream(ctx, path, devID, volume)
+		return err
+	})
+	pb.cancel()
+	p.mu.Lock()
+	if p.cur == pb {
+		p.cur = nil
+		p.changed("")
+	}
+	delete(p.overlays, pb)
+	p.mu.Unlock()
+	close(pb.done)
+	if done != nil {
+		done(warn, err)
+	}
 }
 
 func playStream(ctx context.Context, path, devID string, volume float64) (warn string, err error) {

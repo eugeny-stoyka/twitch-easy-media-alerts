@@ -218,6 +218,7 @@
   .cmd .opts label { display: flex; align-items: center; gap: 8px; }
   .cmd .opts .vol { min-width: 220px; flex: 1 1 220px; max-width: 320px; }
   .cmd .opts select { max-width: 280px; }
+  .cmd .opts .check { margin-top: 0; color: var(--muted); }
   .cmd.off > :not(.sw) { opacity: .45; }
   .cmd.playing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), 0 0 24px rgba(145, 71, 255, .25); }
   button.icon.stop { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -490,11 +491,12 @@
         <div class="card-head">
           <h2 data-en="Sound commands">Звуковые команды</h2><span class="count" id="cmdCount"></span>
           <div class="spacer"></div>
+          <button id="copyCmds" title="Копирует включённые звуковые команды по одной на строку, двумя разделами — Multi (с мультипроигрыванием) и Single — например, для панели канала" data-en-title="Copies the enabled sound commands one per line, in two sections — Multi (with multi-play) and Single — for a channel panel, say" data-en="Copy commands">Копировать команды</button>
           <button class="primary" id="addCmd" data-en="+ Add command">+ Добавить команду</button>
         </div>
         <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
         <div class="list" id="cmdList"></div>
-        <div class="hint" data-en="A command fires when it stands in a message as a separate word, case doesn't matter: “!sad” fires in “oh no !SAD” but not in “!sadness”. If a message has several commands, the one highest in the list fires (sounds first, then videos, then GIFs). Cooldown — how many seconds the command won't fire again. Only one thing plays at a time — a sound, a video or a GIF: until it ends, chat commands are skipped, and ▶ turns into ■ “Stop”.">Команда срабатывает, если стоит в сообщении отдельным словом, регистр не важен: «!sad» сработает в «ну всё !SAD», но не в «!sadness». Если в сообщении несколько команд — срабатывает верхняя по списку (сначала звуки, потом видео, потом GIF). Кулдаун — сколько секунд команда не будет срабатывать повторно. Одновременно играет что-то одно — звук, видео или GIF: пока оно не закончится, команды из чата пропускаются, а ▶ превращается в ■ «Стоп».</div>
+        <div class="hint" data-en="A command fires when it stands in a message as a separate word, case doesn't matter: “!sad” fires in “oh no !SAD” but not in “!sadness”. If a message has several commands, the one highest in the list fires (sounds first, then videos, then GIFs). Cooldown — how many seconds the command won't fire again. Only one thing plays at a time — a sound, a video or a GIF: until it ends, chat commands are skipped, and ▶ turns into ■ “Stop”. Sounds and GIFs with “Multi-play” ticked are the exception: they start at once, over whatever plays, and don't hold up other commands (up to 10 at once).">Команда срабатывает, если стоит в сообщении отдельным словом, регистр не важен: «!sad» сработает в «ну всё !SAD», но не в «!sadness». Если в сообщении несколько команд — срабатывает верхняя по списку (сначала звуки, потом видео, потом GIF). Кулдаун — сколько секунд команда не будет срабатывать повторно. Одновременно играет что-то одно — звук, видео или GIF: пока оно не закончится, команды из чата пропускаются, а ▶ превращается в ■ «Стоп». Исключение — звуки и GIF с галкой «Мультипроигрывание»: они запускаются сразу, поверх того, что играет, и не задерживают другие команды (до 10 одновременно).</div>
       </section>
     </div>
 
@@ -504,6 +506,7 @@
         <div class="card-head">
           <h2 data-en="Video commands">Видео-команды</h2><span class="count" id="videoCount"></span>
           <div class="spacer"></div>
+          <button id="copyVideos" title="Копирует включённые видео-команды по одной на строку — например, для панели канала" data-en-title="Copies the enabled video commands one per line — for a channel panel, say" data-en="Copy commands">Копировать команды</button>
           <button class="primary" id="addVideo" data-en="+ Add video">+ Добавить видео</button>
         </div>
         <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
@@ -518,11 +521,12 @@
         <div class="card-head">
           <h2 data-en="GIF + Sound">GIF + звук</h2><span class="count" id="gifCount"></span>
           <div class="spacer"></div>
+          <button id="copyGifs" title="Копирует включённые GIF-команды по одной на строку, двумя разделами — Multi (с мультипроигрыванием) и Single — например, для панели канала" data-en-title="Copies the enabled GIF commands one per line, in two sections — Multi (with multi-play) and Single — for a channel panel, say" data-en="Copy commands">Копировать команды</button>
           <button class="primary" id="addGif" data-en="+ Add GIF">+ Добавить GIF</button>
         </div>
         <label class="cmd-master"><span class="switch"><input type="checkbox" class="f-master"><span></span></span><span class="master-text" data-en="All commands on">Все команды включены</span></label>
         <div class="list" id="gifList"></div>
-        <div class="hint" data-en="The picture (gif, webp, apng) is shown while the sound plays, or for the set number of seconds; with neither sound nor time — 5 seconds. Scale, position, “Random position” and the transparent color work as for videos, and it's shown in the same OBS source.">Картинка (gif, webp, apng) показывается, пока играет звук, или заданное число секунд; без звука и без времени — 5 секунд. Масштаб, место, «Случайное место» и прозрачный цвет работают как у видео, а показ идёт в том же источнике OBS.</div>
+        <div class="hint" data-en="The picture (gif, webp, apng) is shown while the sound plays, or for the set number of seconds; with neither sound nor time — 5 seconds. Scale, position, “Random position” and the transparent color work as for videos, and it's shown in the same OBS source. With “Multi-play” it shows at once, over other GIFs and videos.">Картинка (gif, webp, apng) показывается, пока играет звук, или заданное число секунд; без звука и без времени — 5 секунд. Масштаб, место, «Случайное место» и прозрачный цвет работают как у видео, а показ идёт в том же источнике OBS. С «Мультипроигрыванием» картинка показывается сразу, поверх других GIF и видео.</div>
       </section>
     </div>
   </div>
@@ -734,6 +738,7 @@
       <label class="vol"><span data-en="Volume">Громкость</span> <input type="range" class="f-volume" min="0" max="200" step="1"><output class="f-volume-val">100%</output></label>
       <label><span data-en="Output">Вывод</span> <select class="f-device"></select></label>
       <label><span data-en="Cooldown">Кулдаун</span> <input type="number" class="f-cooldown" min="0" max="3600" step="1"> <span data-en="s">сек.</span></label>
+      <label class="check" title="Играет сразу, поверх других звуков, видео и GIF, а не ждёт, пока они закончатся" data-en-title="Plays at once, over other sounds, videos and GIFs, instead of waiting for them to end"><input type="checkbox" class="f-multi"><span data-en="Multi-play">Мультипроигрывание</span></label>
     </div>
     <div class="note"></div>
   </div>
@@ -809,6 +814,7 @@
       <label class="vol"><span data-en="Scale">Масштаб</span> <input type="range" class="f-scale" min="5" max="100" step="1"><output class="f-scale-val">100%</output></label>
       <label title="0 — пока играет звук" data-en-title="0 — while the sound plays"><span data-en="Show for">Показывать</span> <input type="number" class="f-duration" min="0" max="600" step="1"> <span data-en="s">сек.</span></label>
       <label><span data-en="Cooldown">Кулдаун</span> <input type="number" class="f-cooldown" min="0" max="3600" step="1"> <span data-en="s">сек.</span></label>
+      <label class="check" title="Показывается сразу, поверх других GIF, видео и звуков, а не ждёт, пока они закончатся" data-en-title="Shows at once, over other GIFs, videos and sounds, instead of waiting for them to end"><input type="checkbox" class="f-multi"><span data-en="Multi-play">Мультипроигрывание</span></label>
     </div>
     <div class="place">
       <div class="stage" title="Перетащите картинку, чтобы выбрать место" data-en-title="Drag the picture to choose its position">
@@ -995,11 +1001,7 @@ function scheduleSave(delay = 300) {
 function saveNow() {
   clearTimeout(saveTimer);
   saveTimer = 0;
-  return goSaveConfig(S.cfg).then(missing => {
-    S.missing = new Set(missing || []);
-    refreshNotes();
-    refreshThumbs();
-  }).catch(toast);
+  return goSaveConfig(S.cfg).catch(toast); // the files' check comes as a "missing" event
 }
 window.addEventListener("beforeunload", () => { if (saveTimer) saveNow(); });
 
@@ -1200,6 +1202,12 @@ function buildRow(kind, cmd) {
   cd.value = cmd.cooldown;
   cd.addEventListener("input", () => { cmd.cooldown = clampNum(Math.floor(+cd.value || 0), 0, 3600); scheduleSave(); });
   cd.addEventListener("blur", () => { cd.value = cmd.cooldown; });
+
+  const multi = $(".f-multi", row); // sounds and GIFs only
+  if (multi) {
+    multi.checked = !!cmd.multiPlay;
+    multi.addEventListener("change", () => { cmd.multiPlay = multi.checked; scheduleSave(0); });
+  }
 
   const test = $(".f-test", row);
   test.innerHTML = PLAY_ICON;
@@ -1947,7 +1955,14 @@ function renderLogEmpty() {
 }
 
 // ---------- events from Go ----------
+// Go answers goGetInitial with an "initial" event. Events that came before it
+// are already part of that state, so they're skipped until init has it.
+let gotInitial;
+const initial = new Promise(resolve => { gotInitial = resolve; });
+
 window.onAppEvent = ev => {
+  if (ev.type === "initial") { gotInitial(ev.state); return; }
+  if (!S.cfg) return;
   switch (ev.type) {
     case "status": S.status = ev.status; renderStatus(); break;
     case "log": addLog(ev.entry); break;
@@ -1972,6 +1987,17 @@ window.onAppEvent = ev => {
       break;
     case "pointsLogin": S.pointsUri = ev.uri; break;
     case "configPath": $("#configPath").textContent = ev.path; break;
+    case "missing":
+      S.missing = new Set(ev.ids || []);
+      refreshNotes();
+      refreshThumbs();
+      break;
+    case "devices":
+      if (ev.error) { $("#deviceError").textContent = ev.error; break; }
+      S.devices = ev.devices || [];
+      $("#deviceError").textContent = "";
+      renderDevices();
+      break;
     case "fileChosen": {
       const item = findItem(ev.id);
       const row = rowOf(ev.id);
@@ -1985,6 +2011,26 @@ window.onAppEvent = ev => {
     }
   }
 };
+
+// commandsText lists the enabled commands of a chat list (commands, videos
+// or gifs) for a channel panel or description, a command per line. Sounds
+// and GIFs come in two sections, "Multi:" (multi-play) and "Single:", with a
+// blank line between them; videos always play one at a time, so they're a
+// plain list.
+function commandsText(kind) {
+  const seen = new Set(), multi = [], single = [];
+  for (const c of itemsOf(kind)) {
+    const t = c.trigger.trim(), key = normTrigger(t);
+    if (!c.enabled || !t || seen.has(key)) continue;
+    seen.add(key);
+    (c.multiPlay ? multi : single).push(t);
+  }
+  if (kind === "videos") return single.join("\r\n");
+  return [["Multi", multi], ["Single", single]]
+    .filter(([, list]) => list.length)
+    .map(([name, list]) => [name + ":", ...list].join("\r\n"))
+    .join("\r\n\r\n");
+}
 
 // ---------- wiring ----------
 function bindGeneral() {
@@ -2019,14 +2065,24 @@ function bindGeneral() {
   gc.addEventListener("input", () => { S.cfg.globalCooldown = clampNum(Math.floor(+gc.value || 0), 0, 3600); scheduleSave(); });
   gc.addEventListener("blur", () => { gc.value = S.cfg.globalCooldown; });
 
-  $("#refreshDevices").addEventListener("click", async () => {
-    try {
-      S.devices = (await goRefreshDevices()) || [];
-      $("#deviceError").textContent = "";
-      renderDevices();
-    } catch (e) { $("#deviceError").textContent = String(e); }
+  // The list comes back as a "devices" event.
+  $("#refreshDevices").addEventListener("click", () => {
+    goRefreshDevices().catch(e => { $("#deviceError").textContent = String(e); });
   });
   $("#stopAll").addEventListener("click", () => goStop());
+  for (const [id, kind] of [["#copyCmds", "commands"], ["#copyVideos", "videos"], ["#copyGifs", "gifs"]]) {
+    const btn = $(id);
+    let timer = 0;
+    btn.addEventListener("click", () => {
+      const text = commandsText(kind);
+      if (!text) { toast(L("There are no enabled commands to copy.", "Нет включённых команд — копировать нечего.")); return; }
+      goCopyText(text).then(() => {
+        btn.textContent = L("Copied ✓", "Скопировано ✓");
+        clearTimeout(timer);
+        timer = setTimeout(() => { btn.textContent = L("Copy commands", "Копировать команды"); }, 1500);
+      }).catch(toast);
+    });
+  }
   $("#addCmd").addEventListener("click", () => addItem("commands"));
   $("#addVideo").addEventListener("click", () => addItem("videos"));
   $("#addGif").addEventListener("click", () => addItem("gifs"));
@@ -2112,7 +2168,8 @@ $("#ctx").addEventListener("click", async e => {
 });
 
 (async function init() {
-  const st = await goGetInitial();
+  await goGetInitial();
+  const st = await initial;
   S.cfg = st.config;
   LANG = S.cfg.language === "ru" ? "ru" : "en";
   applyLang();

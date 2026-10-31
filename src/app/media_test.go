@@ -210,6 +210,116 @@ func TestGifMediaAndPlayEvent(t *testing.T) {
 	}
 }
 
+// waitEvent reads the event stream until an event contains want.
+func waitEvent(t *testing.T, sc *bufio.Scanner, want string) string {
+	t.Helper()
+	got := make(chan string, 1)
+	go func() {
+		for sc.Scan() {
+			if d, ok := strings.CutPrefix(sc.Text(), "data: "); ok && strings.Contains(d, want) {
+				got <- d
+				return
+			}
+		}
+		close(got)
+	}()
+	select {
+	case d, ok := <-got:
+		if !ok {
+			t.Fatalf("event stream ended before an event with %s", want)
+		}
+		return d
+	case <-time.After(3 * time.Second):
+		t.Fatalf("no event with %s", want)
+	}
+	return ""
+}
+
+func TestMultiPlayGifs(t *testing.T) {
+	a := newVideoTestApp(t)
+	a.cfg.Gifs = []config.GifCommand{
+		{ID: "g", Enabled: true, Trigger: "!gif", Image: `C:\x.gif`, Volume: 100, Look: config.Look{Scale: 50}},
+		{ID: "m", Enabled: true, Trigger: "!wow", Image: `C:\y.gif`, Volume: 100, MultiPlay: true, Look: config.Look{Scale: 50}},
+	}
+	obs, err := http.Get(a.overlay.PageURL("events?kind=obs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer obs.Body.Close()
+	events := bufio.NewScanner(obs.Body)
+	readEvent(t, events) // config
+	for a.obsPages.Load() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	multiCount := func() int {
+		a.mediaMu.Lock()
+		defer a.mediaMu.Unlock()
+		return len(a.multiGifs)
+	}
+
+	// A video holds the slot; multi-play GIFs show over it and over each other.
+	if err := a.startVideo(a.cfg.Videos[0], false); err != nil {
+		t.Fatal(err)
+	}
+	if ev := readEvent(t, events); !strings.Contains(ev, `"multi":false`) {
+		t.Errorf("the video's play event: %s", ev)
+	}
+	a.onMessage("viewer", "!wow")
+	if ev := readEvent(t, events); !strings.Contains(ev, `"multi":true`) || !strings.Contains(ev, `"image":"media/m/image`) {
+		t.Errorf("the multi-play GIF's play event: %s", ev)
+	}
+	a.onMessage("viewer2", "!wow")
+	if n := multiCount(); n != 2 || a.video == nil || a.video.id != "v" {
+		t.Fatalf("multi-play GIFs = %d, slot = %+v", n, a.video)
+	}
+
+	// They don't hold up single-play commands: once the video ends, a GIF
+	// takes the slot.
+	a.onVideoReport(overlay.Report{Type: "ended", Play: a.video.seq})
+	a.onMessage("viewer", "!gif")
+	if a.video == nil || a.video.id != "g" {
+		t.Fatalf("single-play GIF didn't take the slot: %+v", a.video)
+	}
+
+	// A multi-play GIF ends by its own report and leaves the slot alone.
+	a.mediaMu.Lock()
+	var seq int
+	for s := range a.multiGifs {
+		seq = s
+		break
+	}
+	a.mediaMu.Unlock()
+	a.onVideoReport(overlay.Report{Type: "started", Play: seq, Duration: 1})
+	a.onVideoReport(overlay.Report{Type: "ended", Play: seq})
+	if n := multiCount(); n != 1 || a.video == nil || a.video.id != "g" {
+		t.Fatalf("after one ended: multi-play GIFs = %d, slot = %+v", n, a.video)
+	}
+
+	// Up to maxMultiGifs show at once; past that a chat command is skipped.
+	for multiCount() < maxMultiGifs {
+		if err := a.startGifMulti(a.cfg.Gifs[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.startGifMulti(a.cfg.Gifs[1]); !errors.Is(err, errTooManyGifs) {
+		t.Errorf("past the cap: %v, want errTooManyGifs", err)
+	}
+	a.onMessage("viewer", "!wow")
+	a.mu.Lock()
+	last := a.logs[len(a.logs)-1]
+	a.mu.Unlock()
+	if last.Kind != "skip" || !strings.Contains(last.Text, "too many GIFs") {
+		t.Errorf("last log = %+v", last)
+	}
+
+	// Stop ends them all, on the page too.
+	a.stopAll()
+	if a.isPlaying() || multiCount() != 0 {
+		t.Error("stopAll left something showing")
+	}
+	waitEvent(t, events, `"all":true`)
+}
+
 func TestMissingGifFiles(t *testing.T) {
 	dir := t.TempDir()
 	img := filepath.Join(dir, "a.gif")
